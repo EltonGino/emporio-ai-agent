@@ -5,12 +5,14 @@ description = "AI customer service agent for retail — built for Empório da M�
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "fastembed>=0.9.1",
+    "langchain-core>=1.7.3",
     "numpy>=2.5.4",
     "pydantic>=2.14.2",
     "pydantic-settings>=2.16.2",
     "pypdf>=6.21.4",
     "pyyaml>=6.0.3",
     "rank-bm25>=0.2.2",
+    "rapidfuzz>=3.14.6",
     "sqlalchemy>=2.1.6",
     "tzdata>=2026.6",
     "unidecode>=1.4.0",

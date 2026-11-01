@@ -13,10 +13,11 @@ Update this file in the same commit as every plan step (see AGENTS.md §0 and §
 
 ## Next step
 
-Step 8 — `feat(tools): catalog and promotion tools` (+ tests) (AGENTS.md §5.2, §7). Start the
-`StoreRepository` protocol + SQL implementation; tools `search_products` (default `limit=5`,
-see "Groq free-tier budget"), `get_product_details`, `list_active_promotions`. Short
-docstrings, compact JSON, money as Decimal → float + pt-BR string.
+Step 9 — `feat(tools): payment rules` (+ tests) (AGENTS.md §7 `calculate_payment_options`,
+§14 boundaries R$ 240 → 3x, R$ 480 → 6x, R$ 1.200 → 12x). Pure functions in
+`client/rules.py` (already holds availability/discount/format_brl); replace
+`profiling._max_installments` with the rules function; add the tool to `build_tools`; add the
+payment summary to `get_product_details` (deferred from step 8).
 
 ## Plan status
 
@@ -28,8 +29,8 @@ docstrings, compact JSON, money as Decimal → float + pt-BR string.
 | 4 | Data profiling script | done | `feat(data): data profiling script` (bf0f706) |
 | 5 | PDF ingestion + structure-aware chunking | done | `feat(retrieval): PDF ingestion and structure-aware chunking` (c00eb36) |
 | 6 | BM25, dense and hybrid retrievers | done | `feat(retrieval): BM25, dense and hybrid retrievers` (31ab685) |
-| 7 | Retrieval golden set + eval script | done | `feat(evals): retrieval golden set and evaluation script` |
-| 8 | Catalog and promotion tools | pending | |
+| 7 | Retrieval golden set + eval script | done | `feat(evals): retrieval golden set and evaluation script` (fdb9a8e) |
+| 8 | Catalog and promotion tools | done | `feat(tools): catalog and promotion tools` |
 | 9 | Payment rules | pending | |
 | 10 | Order status + return eligibility | pending | |
 | 11 | Store status, policy search, handoff | pending | |
@@ -328,6 +329,50 @@ docstrings, compact JSON, money as Decimal → float + pt-BR string.
 - **Step 7** — No tuning after measuring (no held-out set: tuning RRF weights/depth on these 21
   cases would overfit). Candidate improvements for README "next steps": weighted RRF or a
   bigger dense depth, a held-out query set, and a smaller embedding model comparison.
+- **Retrieval eval caveats for the README (owner decision, 2026-11-01) — apply in step 23.**
+  The README must say, next to the table: (1) with 21 questions each one is worth ~5 p.p. of
+  hit@k, so differences between retrievers are **indicative, not significant**; (2) the
+  agent-style queries were written by someone who knew the manual, which tends to make those
+  numbers **optimistic**; the real test of query rewriting is the end-to-end routing evals of
+  step 15 (the agent writes its own queries there).
+- **CI split (owner decision, 2026-11-01) — apply in step 16.** Two jobs: a **fast** job running
+  `pytest -m "not llm and not embeddings"` (+ ruff, frontend build) and an **embeddings** job
+  running `pytest -m embeddings` with `data/runtime/models` restored from `actions/cache`.
+- **Step 8** — `StoreRepository` protocol (`client/repository.py`) returns plain frozen records
+  (`ProductInfo`, `PromotionInfo`), never ORM objects. This step implements the catalog methods
+  (`find_products`, `get_product`, `active_promotion`, `list_active_promotions`); order and
+  handoff methods arrive in steps 10/11.
+- **Step 8** — Catalog search (`client/matching.py`): query → terms (unidecode, lowercase,
+  stopwords, rough PT singular "violões" → "violao", hyphens joined so "GD-20" = "GD20"; product
+  model codes also indexed by parts so "gd 20" matches). A term matches exactly, or with
+  `rapidfuzz.fuzz.ratio ≥ 85` for alphabetic words of 5+ letters ("takamini", "yamha" match;
+  "kala" ≠ "kalani"; numbers/codes exact). Product text = name + category + spec values +
+  small spec aliases (steel → "aço", electronics yes → "elétrico eletroacústico"). Results =
+  products matching **all** terms; if none, those matching ≥ half (alternatives). Ranked by
+  match, then final price ascending. Runs in Python over SQL-filtered candidates (65
+  products); production path would be trigram/FTS in Postgres.
+- **Step 8** — Category filter is resolved by name ("violões", "ukulele", "piano") and, if no
+  name matches, by description ("saxofone" → empty woodwinds category → 0 results, D9). Unknown
+  category → `{"error":"unknown_category","categories":[...]}` so the agent can explain what
+  the store sells (e.g. "pedais").
+- **Step 8** — Price filters compare the **final** price (after the active promotion): a
+  customer asking "até R$ 450" should see the R$ 549 ukulele at 20% off (R$ 439,20).
+- **Step 8** — With `only_available=True`, a **named** search also returns `unavailable` (up to
+  3 matching items that can't be sold, with their label), and the available results become
+  the alternatives: "Giannini GF-3D" → `unavailable: [GF-3D esgotado]` + other Giannini models.
+  Category/price browsing omits unavailable items silently.
+- **Step 8** — Output: compact JSON (`ensure_ascii=False`, no spaces), money as `price` +
+  `price_text`, `promo: {name, percent, final_price, final_price_text}` only when active,
+  up to 3 key specs in search results (priority list `KEY_SPECS`), full specs in details.
+  Stock quantity is not exposed (only the availability label). Unreliable descriptions (D2)
+  are omitted entirely. Measured: the 3 tool schemas ≈ 400 tokens; a 5-item search result
+  ≈ 260 tokens.
+- **Step 8** — `client/rules.py` started here with `availability` (D1), `apply_discount`
+  (Decimal, ROUND_HALF_UP to cents) and `format_brl`; step 9 adds the payment rules.
+  `get_product_details` has **no payment summary yet** (AGENTS.md §7) — it needs step 9's rules.
+- **Step 8** — Tools are created by `build_tools(repo)` (closures over the repository) with
+  pydantic `args_schema`s; later steps extend it. Deps: `rapidfuzz`, `langchain-core` (the rest
+  of LangChain arrives with the agent in step 12).
 - **Convention** — The "Commit" column holds the commit subject; hashes are in `git log`
   (a commit cannot contain its own hash).
 
@@ -344,7 +389,7 @@ docstrings, compact JSON, money as Decimal → float + pt-BR string.
 - Step 9: replace `profiling._max_installments` with the `rules.py` installment function.
 - The 1 GB embedding model must be available in CI (step 7's hit@3 ≥ 0.85 pytest needs it) and
   in Docker (step 21): cache it (actions/cache on `data/runtime/models`) / bake it into the
-  image or a volume. Decide in steps 7/16/21.
+  image or a volume. CI: two jobs (see "CI split" decision); Docker: decide in step 21.
 - Chunks are verbatim: chunk 1.2 contains the accented email (P2) and chunk 7 the other
   WhatsApp number (P1). Steps 11/12: contacts must come from `client.yaml` (store status tool /
   prompt), and the prompt must say config contacts win over retrieved text.
@@ -445,3 +490,15 @@ docstrings, compact JSON, money as Decimal → float + pt-BR string.
   ~1.4 s with the model cached).
 - Notes: "defeito depois de 2 meses" scores fine in the eval because 4.2 also answers it (rank
   1); the RRF issue from step 6 shows up instead in `shipping_big_instrument`.
+
+### 2026-11-01 23:00 — Step 8: Catalog and promotion tools
+- Done: pushed step 7 (owner approval); recorded the README eval caveats and the CI split
+  (Decisions). `StoreRepository` protocol + SQL implementation (catalog part), fuzzy catalog
+  matching, `rules.py` (availability, discount, BRL formatting), tools `search_products`
+  (default limit 5), `get_product_details`, `list_active_promotions`.
+- Files: `src/emporio_agent/client/{rules,matching,repository,tools}.py`,
+  `tests/test_catalog.py`, `pyproject.toml`, `uv.lock`, `PROGRESS.md`.
+- Deps: rapidfuzz 3.14.6, langchain-core 1.7.3 (+ langsmith as its dependency).
+- Tests: ruff ok, format ok, `pytest -m "not llm"` 122 passed.
+- Notes: query "cordas" (strings, an accessory) matches the 7-string guitars by name; the
+  prompt (step 12) handles accessory questions, and step 15 has a routing case for it.
