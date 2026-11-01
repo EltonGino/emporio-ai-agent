@@ -1,0 +1,114 @@
+# Retrieval golden set for the policy manual (data/raw/politicas_da_loja.pdf).
+#
+# Each case has the sections that answer it (`expected`: any of them counts as a hit) and the
+# same question in two styles:
+#   customer — how a customer writes on WhatsApp (informal, situation-specific)
+#   agent    — the self-contained, policy-oriented query the agent is told to send to
+#              search_policies (see PROGRESS.md, "search_policies query rewriting")
+# Written before measuring; do not tune the queries to the results.
+
+cases:
+  - id: pix_on_promotion
+    expected: ["6.2"]
+    customer: "PIX tem desconto em promoção?"
+    agent: "desconto do PIX vale para produtos em promoção? cumulatividade de descontos"
+
+  - id: mouthpiece_return
+    expected: ["4.4"]
+    customer: "boquilha troca?"
+    agent: "troca de boquilha de instrumento de sopro: item elegível para troca?"
+
+  - id: regret_return
+    expected: ["4.1"]
+    customer: "me arrependi da compra, posso devolver?"
+    agent: "prazo e condições para devolução por arrependimento de compra online"
+
+  - id: refund_time
+    expected: ["4.1"]
+    customer: "em quanto tempo recebo meu dinheiro de volta?"
+    agent: "prazo e forma de reembolso após devolução do produto"
+
+  - id: defect_recent
+    expected: ["4.2"]
+    customer: "o violão chegou com defeito, e agora?"
+    agent: "troca de produto com defeito de fabricação: prazo e procedimento"
+
+  - id: defect_after_two_months
+    expected: ["4.2", "8.1", "8.2"]
+    customer: "comprei faz 2 meses e deu defeito, vocês trocam?"
+    agent: "defeito de fabricação após 30 dias da compra: garantia legal e do fabricante"
+
+  - id: preference_exchange
+    expected: ["4.3"]
+    customer: "posso trocar meu ukulele por outra cor?"
+    agent: "troca por preferência de cor ou modelo: prazo e condições"
+
+  - id: warranty_drop
+    expected: ["8.3", "4.2"]
+    customer: "deixei a guitarra cair, a garantia cobre?"
+    agent: "garantia cobre danos por queda ou mau uso?"
+
+  - id: manufacturer_warranty
+    expected: ["8.2"]
+    customer: "quanto tempo de garantia de fábrica tem?"
+    agent: "duração da garantia do fabricante"
+
+  - id: shipping_other_city
+    expected: ["5.2"]
+    customer: "quanto tempo demora pra chegar em Dourados?"
+    agent: "prazo de entrega para outras cidades fora de Campo Grande"
+
+  - id: shipping_big_instrument
+    expected: ["5.2"]
+    customer: "quanto fica o frete de uma bateria acústica?"
+    agent: "frete para instrumentos de grande porte como bateria acústica"
+
+  - id: shipping_metro_free
+    expected: ["5.1"]
+    customer: "o frete é grátis aqui em Campo Grande?"
+    agent: "frete grátis e taxa de entrega na região metropolitana de Campo Grande"
+
+  - id: tracking
+    expected: ["5.3"]
+    customer: "como eu rastreio meu pedido?"
+    agent: "código de rastreamento do pedido: como recebo e onde consulto"
+
+  - id: installments
+    expected: ["3.1", "3"]
+    customer: "em quantas vezes posso parcelar?"
+    agent: "regras de parcelamento no cartão de crédito e parcela mínima"
+
+  - id: combined_payment
+    expected: ["3.1"]
+    customer: "dá pra pagar metade no pix e metade no cartão?"
+    agent: "combinar duas formas de pagamento, PIX e cartão, na mesma compra"
+
+  - id: boleto_clearing
+    expected: ["3"]
+    customer: "boleto demora quanto pra compensar?"
+    agent: "prazo de compensação do pagamento por boleto bancário"
+
+  - id: sunday_hours
+    expected: ["2"]
+    customer: "vocês abrem domingo?"
+    agent: "horário de funcionamento da loja aos domingos e feriados"
+
+  - id: accessories
+    expected: ["1", "7.1"]
+    customer: "vocês vendem cordas e pedais?"
+    agent: "a loja vende acessórios como cordas, pedais e amplificadores?"
+
+  - id: black_friday
+    expected: ["6.1"]
+    customer: "quando é a black friday de vocês?"
+    agent: "campanhas de promoção da loja ao longo do ano, Black Friday"
+
+  - id: rain_check
+    expected: ["6.2"]
+    customer: "esgotou na promoção, vocês seguram o preço pra mim?"
+    agent: "produto esgotado durante promoção: reserva do preço promocional"
+
+  - id: data_sharing
+    expected: ["9"]
+    customer: "vocês passam meus dados pra outras empresas?"
+    agent: "privacidade: compartilhamento de dados pessoais do cliente com terceiros, LGPD"

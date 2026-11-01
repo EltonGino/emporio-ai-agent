@@ -36,6 +36,7 @@ testpaths = ["tests"]
 addopts = "-ra"
 markers = [
     "llm: calls the real LLM provider (needs an API key; skipped in CI with -m \"not llm\")",
+    "embeddings: loads the real embedding model (~1 GB download on first run)",
 ]
 
 [dependency-groups]

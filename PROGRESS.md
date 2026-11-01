@@ -13,9 +13,10 @@ Update this file in the same commit as every plan step (see AGENTS.md §0 and §
 
 ## Next step
 
-Step 7 — `feat(evals): retrieval golden set and evaluation script` (AGENTS.md §6 "Eval").
-Use `get_retrievers()` → (bm25, dense, hybrid). Include the weak spots seen in step 6 (see Log)
-in the golden set; report real numbers, tune only after measuring.
+Step 8 — `feat(tools): catalog and promotion tools` (+ tests) (AGENTS.md §5.2, §7). Start the
+`StoreRepository` protocol + SQL implementation; tools `search_products` (default `limit=5`,
+see "Groq free-tier budget"), `get_product_details`, `list_active_promotions`. Short
+docstrings, compact JSON, money as Decimal → float + pt-BR string.
 
 ## Plan status
 
@@ -26,8 +27,8 @@ in the golden set; report real numbers, tune only after measuring.
 | 3 | SQLite models + CSV loader with cleaning | done | `feat(data): SQLite models and CSV loader with cleaning rules` (5ae77a6) |
 | 4 | Data profiling script | done | `feat(data): data profiling script` (bf0f706) |
 | 5 | PDF ingestion + structure-aware chunking | done | `feat(retrieval): PDF ingestion and structure-aware chunking` (c00eb36) |
-| 6 | BM25, dense and hybrid retrievers | done | `feat(retrieval): BM25, dense and hybrid retrievers` |
-| 7 | Retrieval golden set + eval script | pending | |
+| 6 | BM25, dense and hybrid retrievers | done | `feat(retrieval): BM25, dense and hybrid retrievers` (31ab685) |
+| 7 | Retrieval golden set + eval script | done | `feat(evals): retrieval golden set and evaluation script` |
 | 8 | Catalog and promotion tools | pending | |
 | 9 | Payment rules | pending | |
 | 10 | Order status + return eligibility | pending | |
@@ -125,6 +126,29 @@ in the golden set; report real numbers, tune only after measuring.
 - **Embedding model footprint (step 6, this Mac)**: download ≈ **1.0 GB** into
   `data/runtime/models/` (gitignored); first run (download + load) 19.4 s; later loads ~0.9 s;
   embedding the 26 chunks 2.0 s; a hybrid query ≈ 12–21 ms on CPU.
+- **Retrieval eval (step 7, 2026-11-01)** — `uv run python scripts/eval_retrieval.py`, 21 cases ×
+  2 styles, MRR over top 10. Real numbers (README table):
+
+  | Retriever | Style    | hit@1 | hit@3 | MRR  |
+  |-----------|----------|-------|-------|------|
+  | bm25      | customer | 0.71  | 0.81  | 0.76 |
+  | dense     | customer | 0.62  | 0.76  | 0.71 |
+  | hybrid    | customer | 0.71  | 0.95  | 0.83 |
+  | bm25      | agent    | 0.95  | 1.00  | 0.98 |
+  | dense     | agent    | 0.81  | 0.95  | 0.88 |
+  | hybrid    | agent    | 0.90  | 0.95  | 0.94 |
+  | bm25      | all      | 0.83  | 0.90  | 0.87 |
+  | dense     | all      | 0.71  | 0.86  | 0.80 |
+  | hybrid    | all      | 0.81  | 0.95  | 0.88 |
+
+  Reading: hybrid is the most **robust** (hit@3 0.95 in both styles); **BM25 wins on
+  agent-style queries** (hit@3 1.00) but falls to 0.81 on customer phrasing (4 queries not in
+  its top 10: regret, refund, Dourados, installments — no shared terms); dense alone is the
+  weakest. Query rewriting helps every retriever (hybrid MRR 0.83 → 0.94; "Dourados" rank
+  6 → 1). Hybrid's one bad case: `shipping_big_instrument` agent-style is BM25 rank 1 but
+  missing from dense's top 10, so RRF drops it to rank 7 (chunks in both lists score 2/(60+r),
+  beating 1/61). Hybrid kept as default: the agent won't always rewrite perfectly, and hybrid
+  has the best worst case.
 - Manual §2 hours confirmed from the PDF: Mon–Fri 09:00–18:00, Sat 09:00–13:00, Sun and
   holidays closed.
 
@@ -287,6 +311,23 @@ in the golden set; report real numbers, tune only after measuring.
   temp dir that the OS may wipe).
 - **Step 6** — Unit tests use a hashing bag-of-words `FakeEmbedder`, so `pytest -m "not llm"`
   needs no model download; real retrieval quality is the step 7 eval's job.
+- **`search_policies` query rewriting (owner decision, 2026-11-01) — apply in step 11.** The tool
+  description must tell the agent to send a **self-contained, policy-oriented query**, not to
+  repeat the customer's message, e.g. "quanto demora pra Dourados?" → "prazo de entrega para
+  outras cidades fora de Campo Grande". Reason: step 6 showed customer phrasing can miss the
+  right section (the manual never names cities). Step 7's golden set has both styles per case
+  (`customer` and `agent`) and reports metrics per style, so the gain is measured.
+- **Step 7** — Golden set (`evals/retrieval_golden.yaml`): 21 cases, each with `expected`
+  section ids (any one counts as a hit) and the same question in two styles, `customer` and
+  `agent`, written **before** measuring. Logic in `core/retrieval/evaluation.py` (unit-tested
+  with a stub retriever); `scripts/eval_retrieval.py [--cases]` prints the table and per-case
+  ranks. A guard test checks every expected section id still exists in the chunker output.
+- **Step 7** — The §6 pytest (hybrid hit@3 ≥ 0.85) is asserted for **each style and overall**
+  and carries a new `embeddings` marker (needs the real model). It still runs under
+  `-m "not llm"`, so CI must provide the model (cache) — see Known issues.
+- **Step 7** — No tuning after measuring (no held-out set: tuning RRF weights/depth on these 21
+  cases would overfit). Candidate improvements for README "next steps": weighted RRF or a
+  bigger dense depth, a held-out query set, and a smaller embedding model comparison.
 - **Convention** — The "Commit" column holds the commit subject; hashes are in `git log`
   (a commit cannot contain its own hash).
 
@@ -393,3 +434,14 @@ in the golden set; report real numbers, tune only after measuring.
   em Dourados?" (expected 5.2; neither retriever finds it — the chunk never names a city);
   "o violão veio com defeito depois de 2 meses" (hybrid [4.2, 0, 10]: RRF lifts chunks that
   are mid-ranked in both lists over 8.2/8.3, each high in only one).
+
+### 2026-11-01 22:20 — Step 7: Retrieval golden set + eval script
+- Done: pushed step 6 (owner approval); recorded the `search_policies` query-rewriting rule
+  for step 11. Golden set (21 cases × customer/agent styles), evaluation module, script,
+  tests; metrics recorded in Verified facts.
+- Files: `evals/retrieval_golden.yaml`, `src/emporio_agent/core/retrieval/evaluation.py`,
+  `scripts/eval_retrieval.py`, `tests/test_retrieval_eval.py`, `pyproject.toml` (marker).
+- Tests: ruff ok, format ok, `pytest -m "not llm"` 82 passed (incl. the `embeddings` test,
+  ~1.4 s with the model cached).
+- Notes: "defeito depois de 2 meses" scores fine in the eval because 4.2 also answers it (rank
+  1); the RRF issue from step 6 shows up instead in `shipping_big_instrument`.
