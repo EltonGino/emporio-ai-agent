@@ -9,6 +9,7 @@ Update this file in the same commit as every plan step (see AGENTS.md §0 and §
 2. Read "Next step" and the latest log entry below.
 3. Run `uv sync && uv run pytest -m "not llm"` to confirm the current state is green.
 4. Continue with the next step; update this file before committing.
+5. **Read "Groq free-tier budget" under Decisions** — it overrides AGENTS.md for steps 8–17.
 
 ## Next step
 
@@ -20,7 +21,7 @@ Use `get_settings().database_url` and `PROJECT_ROOT / "data/raw"`; CSVs are CRLF
 | # | Step | Status | Commit |
 |---|---|---|---|
 | 1 | Project scaffold | done | `chore: project scaffold` (de38bce) |
-| 2 | Config, client.yaml, clock | done | `feat(config): client.yaml, settings and injectable clock` |
+| 2 | Config, client.yaml, clock | done | `feat(config): client.yaml, settings and injectable clock` (dad4f86); budget settings in `feat(config): Groq free-tier budget settings` |
 | 3 | SQLite models + CSV loader with cleaning | pending | |
 | 4 | Data profiling script | pending | |
 | 5 | PDF ingestion + structure-aware chunking | pending | |
@@ -52,16 +53,41 @@ Use `get_settings().database_url` and `PROJECT_ROOT / "data/raw"`; CSVs are CRLF
   `uv_build>=0.13.6,<0.14.0` (what `uv init --package` generates for this uv version).
 - **LLM_MODEL = `openai/gpt-oss-120b`** (checked 2026-11-01 on console.groq.com/docs/models and
   /docs/tool-use). Groq production models: `llama-3.1-8b-instant`, `llama-3.3-70b-versatile`,
-  `openai/gpt-oss-120b`, `openai/gpt-oss-20b` (+ whisper). Everything else (qwen3.8-27b,
-  minimax-m2.7, muse-spark-open, …) is *preview* ("evaluation only, may be discontinued") →
-  excluded. Groq says all models support tool use and recommends the latest ones.
-  gpt-oss-120b is the newest and largest production model, built for agentic tool use, and
-  multilingual. `llama-3.3-70b-versatile` is the fallback (older; supports parallel tool calls,
-  gpt-oss does not — not needed here). **Open risk:** the rate-limit page lists gpt-oss-120b at
-  30 RPM / 8K TPM / 200K TPD, labelled as the Developer-plan base table, and does not list the
-  Llama models; the real free-tier numbers must be read on the owner's account
-  (console.groq.com/settings/limits). 8K TPM may be tight for multi-tool turns → measure in
-  step 12, rely on §8 retries/backoff, switch model via `LLM_MODEL` if needed.
+  `openai/gpt-oss-120b`, `openai/gpt-oss-20b` (+ whisper); the rest is *preview* ("evaluation
+  only, may be discontinued"). Groq says all models support tool use and recommends the latest
+  ones. gpt-oss-120b is the newest and largest production model, built for agentic tool use,
+  and multilingual. Fallbacks: see "Groq free-tier budget" below (owner's account limits).
+- **Groq free tier on the owner's account** (owner, 2026-11-01): `openai/gpt-oss-120b`,
+  `openai/gpt-oss-20b` and `qwen/qwen3.8-27b` each have **30 RPM, 1K RPD, 8K TPM, 200K TPD**
+  (separate quotas). `llama-3.3-70b-versatile` is **not available** on the account.
+- **Groq reasoning** (console.groq.com/docs/reasoning, 2026-11-01): gpt-oss accepts
+  `reasoning_effort` `low|medium|high`; `reasoning_format` is **not supported** (reasoning comes
+  in the `reasoning` field; `include_reasoning` true/false). qwen3.8-27b accepts
+  `reasoning_effort` `none|default|low|medium|high` and `reasoning_format` `parsed|raw|hidden`
+  (default `raw` = `<think>` tags inside `content`); **with tool use, `raw` returns HTTP 400**, so
+  qwen needs `parsed` or `hidden`. `include_reasoning` cannot be combined with `reasoning_format`.
+- **Groq prompt caching** (console.groq.com/docs/prompt-caching, 2026-11-01): automatic, only on
+  `gpt-oss-20b`/`gpt-oss-120b` (not qwen); "Cached tokens do not count towards your rate limits";
+  needs an identical prefix (min 128–1024 tokens by model); reported in
+  `prompt_tokens_details.cached_tokens`.
+- **LangChain fallback [VERIFY]** (langchain 1.2.13, langchain-core 1.7.3, langchain-groq 1.1.3,
+  langgraph 1.1.3, groq 0.37.1 — inspected in a throwaway env, not yet project deps):
+  `langchain.agents.middleware.ModelFallbackMiddleware(first_model, *additional_models)` exists,
+  accepts model **instances** (so each fallback can carry its own reasoning params), but its
+  `wrap_model_call` falls back on **any `Exception`**, not only 429. `Runnable.with_fallbacks`
+  also exists but sits outside the agent's middleware/tool binding. Rate limits raise
+  `groq.RateLimitError` (subclass of `groq.APIStatusError`).
+- **ChatGroq [VERIFY]**: fields `reasoning_effort`, `reasoning_format`, `max_retries` (default 2;
+  the groq SDK retries 429 with backoff before raising). Reasoning is put in
+  `AIMessage.additional_kwargs["reasoning_content"]`, separate from `content`, for both
+  streaming chunks and full responses. `_convert_message_to_dict` does **not** send
+  `reasoning_content` back to the API (checked), so stored reasoning is not re-billed as input.
+  `usage_metadata` = `input_tokens`, `output_tokens`, `total_tokens`,
+  `input_token_details.cache_read` (cached tokens), `output_token_details.reasoning`.
+- **Token trimming [VERIFY]**: `langchain_core.messages.trim_messages(messages, *, max_tokens,
+  token_counter, strategy="last", start_on=..., end_on=..., include_system=...)` and
+  `langchain_core.messages.utils.count_tokens_approximately` exist (approximate counter ≈ 4
+  chars/token; `token_counter="approximate"` also accepted).
 - **EMBEDDING_MODEL = `sentence-transformers/paraphrase-multilingual-mpnet-base-v2`** (checked
   2026-11-01 with `TextEmbedding.list_supported_models()`, fastembed 0.9.1). Multilingual
   candidates: paraphrase-multilingual-MiniLM-L12-v2 (0.22 GB, but **truncates at 128 tokens** —
@@ -110,6 +136,41 @@ Use `get_settings().database_url` and `PROJECT_ROOT / "data/raw"`; CSVs are CRLF
   known timezone, all 7 weekdays present (null = closed), opening before closing, installment
   bands ordered and contiguous from 1, heading pattern compiled. YAML keys `from`/`to` map to
   `min_installments`/`max_installments`.
+- **Groq free-tier budget (owner decision, 2026-11-01) — overrides AGENTS.md where they differ.**
+  Limits: see Verified facts. Apply in the step listed:
+  1. **Fallback on 429** (step 12): `openai/gpt-oss-120b` → `openai/gpt-oss-20b` →
+     `qwen/qwen3.8-27b` (`LLM_MODEL` + `LLM_FALLBACK_MODELS`, done in step 2 settings).
+     `llama-3.3-70b-versatile` removed as an alternative (not on the account). Implementation:
+     a small middleware based on `ModelFallbackMiddleware` that only falls back on
+     `groq.RateLimitError` (the built-in one catches every exception and would hide real bugs);
+     ChatGroq `max_retries` lowered so a 429 moves to the next model instead of waiting through
+     SDK backoff. When every model is rate limited → friendly "try again later" message.
+     qwen3.8-27b is a Groq *preview* model — acceptable as the last resort, noted in README.
+  2. **Token budget**: system prompt target **~1,200 tokens** (step 12); short tool docstrings
+     and compact tool outputs (steps 8–11); `search_products` default `limit=5` instead of
+     AGENTS.md's 8 (step 8); history trimmed by **tokens** (`HISTORY_MAX_TOKENS`, default 2,500,
+     via `trim_messages`) on top of `HISTORY_MAX_MESSAGES` (step 12), never splitting a tool call
+     from its result.
+  3. **Reasoning** (step 12): `LLM_REASONING_EFFORT=low` (default) for gpt-oss. qwen gets the same
+     effort plus `reasoning_format="parsed"` (required with tools). Reasoning lives only in
+     `additional_kwargs["reasoning_content"]`; the agent emits **only `content`** to CLI/API/UI,
+     never reasoning; a test asserts it.
+  4. **Prompt-cache-friendly prompts** (step 12, follows from the caching facts): the static
+     system prompt + tool schemas must be a byte-identical prefix on every call, so the dynamic
+     context (date/time, open/closed) is **appended after** the static prompt, not prepended as
+     AGENTS.md §8 says. History is append-only within a turn, so later calls in the same turn hit
+     the cache too.
+  5. **Token usage per turn in the trace** (step 13): each `final` event / JSONL record carries
+     input, cached, output and reasoning tokens summed over the turn's model calls, plus the
+     model that answered (to see fallbacks). Used to measure real consumption in step 12/13.
+  6. **Demo limits** (settings done in step 2; enforced in step 17): `MAX_MESSAGES_PER_SESSION`
+     default **15** (was 40); new **`DAILY_MESSAGE_CAP`** (default **60**, customer messages per
+     store-local day across all sessions) with a friendly message when reached. Default 60 is a
+     first estimate (3 models × 200K TPD, assuming ~6–10K counted tokens per customer message
+     without cache hits) → recalibrate with step 12/13 measurements.
+  7. **LLM evals on gpt-oss-20b** (step 15): an option (pytest `--llm-model`, also usable via
+     `LLM_MODEL`/`LLM_FALLBACK_MODELS` env) to run routing/adversarial evals on
+     `openai/gpt-oss-20b` and spare the 120b quota.
 - **Convention** — The "Commit" column holds the commit subject; hashes are in `git log`
   (a commit cannot contain its own hash).
 
@@ -117,8 +178,8 @@ Use `get_settings().database_url` and `PROJECT_ROOT / "data/raw"`; CSVs are CRLF
 
 <!-- Open bugs, flaky tests, things to revisit. -->
 
-- Groq free-tier TPM for `openai/gpt-oss-120b` unconfirmed (see Verified facts) — measure in
-  step 12 with the owner's key.
+- 8K TPM per model may still be tight for multi-tool turns without cache hits — measure in
+  step 12 with the owner's key; recalibrate `DAILY_MESSAGE_CAP`.
 - The persona prompt path in `client.yaml` points to a file created in step 12.
 
 ## Log
@@ -152,3 +213,11 @@ Use `get_settings().database_url` and `PROJECT_ROOT / "data/raw"`; CSVs are CRLF
 - Deps: pydantic 2.14.2, pydantic-settings 2.16.2 (+ python-dotenv), pyyaml 6.0.3, tzdata.
 - Tests: ruff ok, format ok, `pytest -m "not llm"` 22 passed.
 - Notes: [VERIFY] LLM_MODEL and EMBEDDING_MODEL resolved (see Verified facts).
+
+### 2026-11-01 19:10 — Groq free-tier budget adjustments (owner request, before step 3)
+- Done: recorded the owner's Groq limits and the 7-point budget plan (Decisions); verified
+  ModelFallbackMiddleware, ChatGroq reasoning/usage handling, trim_messages, Groq reasoning and
+  prompt caching docs. Settings: `LLM_FALLBACK_MODELS`, `LLM_REASONING_EFFORT`,
+  `DAILY_MESSAGE_CAP`, `HISTORY_MAX_TOKENS`; `MAX_MESSAGES_PER_SESSION` default 15.
+- Files: `src/emporio_agent/config.py`, `tests/test_config.py`, `.env.example`, `PROGRESS.md`.
+- Tests: ruff ok, format ok, `pytest -m "not llm"` 24 passed.

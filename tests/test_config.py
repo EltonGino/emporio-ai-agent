@@ -21,6 +21,10 @@ ENV_VARS = [
     "DATABASE_URL",
     "CHECKPOINT_DB",
     "HISTORY_MAX_MESSAGES",
+    "LLM_FALLBACK_MODELS",
+    "LLM_REASONING_EFFORT",
+    "MAX_MESSAGES_PER_SESSION",
+    "DAILY_MESSAGE_CAP",
 ]
 
 
@@ -37,6 +41,21 @@ def test_settings_defaults(clean_env):
     assert settings.agent_now is None
     assert settings.demo_mode is False
     assert settings.history_max_messages == 20
+    assert settings.llm_model == "openai/gpt-oss-120b"
+    assert settings.llm_fallback_models == ["openai/gpt-oss-20b", "qwen/qwen3.8-27b"]
+    assert settings.llm_reasoning_effort == "low"
+    assert settings.max_messages_per_session == 15
+
+
+def test_fallback_models_are_comma_separated(clean_env):
+    clean_env.setenv("LLM_FALLBACK_MODELS", "qwen/qwen3.8-27b, openai/gpt-oss-20b ,")
+    assert Settings().llm_fallback_models == ["qwen/qwen3.8-27b", "openai/gpt-oss-20b"]
+
+
+def test_invalid_reasoning_effort_is_rejected(clean_env):
+    clean_env.setenv("LLM_REASONING_EFFORT", "max")
+    with pytest.raises(ValidationError):
+        Settings()
 
 
 def test_settings_from_env(clean_env):

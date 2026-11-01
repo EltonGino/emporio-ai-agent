@@ -6,13 +6,13 @@ import re
 from datetime import datetime, time
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
 from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CLIENT_CONFIG_PATH = PROJECT_ROOT / "config" / "client.yaml"
@@ -36,15 +36,32 @@ class Settings(BaseSettings):
 
     llm_provider: str = "groq"
     llm_model: str = "openai/gpt-oss-120b"
+    # Tried in order when the current model is rate limited (each has its own Groq quota).
+    # Comma-separated in the environment.
+    llm_fallback_models: Annotated[list[str], NoDecode] = [
+        "openai/gpt-oss-20b",
+        "qwen/qwen3.8-27b",
+    ]
     llm_temperature: float = 0.2
+    # Reasoning tokens count against the rate limits, so keep reasoning short.
+    llm_reasoning_effort: Literal["low", "medium", "high"] = "low"
     embedding_model: str = "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
     database_url: str = "sqlite:///data/runtime/store.db"
     checkpoint_db: Path = Path("data/runtime/checkpoints.db")
     agent_now: datetime | None = None  # naive = store timezone
     demo_mode: bool = False
-    max_messages_per_session: int = Field(default=40, ge=1)
+    max_messages_per_session: int = Field(default=15, ge=1)
+    daily_message_cap: int = Field(default=60, ge=1)  # all sessions, per store-local day
     session_retention_days: int = Field(default=30, ge=1)
     history_max_messages: int = Field(default=20, ge=2)
+    history_max_tokens: int = Field(default=2500, ge=200)
+
+    @field_validator("llm_fallback_models", mode="before")
+    @classmethod
+    def _split_models(cls, value: str | list[str]) -> list[str]:
+        if isinstance(value, str):
+            return [name.strip() for name in value.split(",") if name.strip()]
+        return value
 
     @field_validator("database_url")
     @classmethod
