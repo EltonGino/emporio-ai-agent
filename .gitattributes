@@ -1,0 +1,2 @@
+# Raw case inputs are stored byte-for-byte (the CSVs use CRLF).
+data/raw/** -text

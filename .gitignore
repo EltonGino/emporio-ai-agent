@@ -1,0 +1,29 @@
+# Secrets
+.env
+
+# Runtime data (SQLite DBs, checkpoints, traces, retrieval index)
+data/runtime/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+
+# Model caches
+.cache/
+models/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Local tooling
+.claude/settings.local.json
+.idea/
+.vscode/
+.DS_Store
