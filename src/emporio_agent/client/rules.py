@@ -1,13 +1,26 @@
-"""Business rules as pure functions: availability, prices and money formatting.
+"""Business rules as pure functions: availability, prices, payments and money formatting.
 
 Tools call these so the LLM never decides availability or computes/formats money itself.
+Payment rules come from `client.yaml` (manual §3, §3.1, §6.2).
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
 
+from emporio_agent.config import InstallmentBand, PaymentsConfig
+
 CENT = Decimal("0.01")
+
+
+def _dec(value: float | int | Decimal) -> Decimal:
+    return value if isinstance(value, Decimal) else Decimal(str(value))
+
+
+def to_cents(value: Decimal) -> Decimal:
+    return value.quantize(CENT, rounding=ROUND_HALF_UP)
 
 
 def availability(status: str, stock: int) -> str:
@@ -19,11 +32,73 @@ def availability(status: str, stock: int) -> str:
     return "disponivel" if stock > 0 else "esgotado"
 
 
-def apply_discount(price: Decimal, percent: int) -> Decimal:
-    return (price * (100 - percent) / 100).quantize(CENT, rounding=ROUND_HALF_UP)
+def apply_discount(price: Decimal, percent: float | int | Decimal) -> Decimal:
+    return to_cents(price * (100 - _dec(percent)) / 100)
 
 
 def format_brl(value: Decimal) -> str:
     """Decimal → pt-BR money string, e.g. Decimal("1299") → "R$ 1.299,00"."""
-    text = f"{value.quantize(CENT, rounding=ROUND_HALF_UP):,.2f}"
+    text = f"{to_cents(value):,.2f}"
     return "R$ " + text.replace(",", "_").replace(".", ",").replace("_", ".")
+
+
+# --- payments --------------------------------------------------------------------------------
+
+
+def installment_allowed(total: Decimal, n: int, bands: Sequence[InstallmentBand]) -> bool:
+    """1x is always allowed; n installments need total / n ≥ the band's minimum (P3)."""
+    if n == 1:
+        return True
+    band = next((b for b in bands if b.min_installments <= n <= b.max_installments), None)
+    return band is not None and total / n >= _dec(band.min_installment)
+
+
+def max_installments(total: Decimal, bands: Sequence[InstallmentBand]) -> int:
+    """Highest allowed n. Band minimums rise as installments shrink, so 1..max are all allowed."""
+    return max(
+        n for n in range(1, bands[-1].max_installments + 1) if installment_allowed(total, n, bands)
+    )
+
+
+def pix_price(price: Decimal, promotional: bool, payments: PaymentsConfig) -> Decimal:
+    """§6.2: the PIX discount doesn't apply on top of a promotional price."""
+    if promotional and not payments.pix_applies_to_promotional:
+        return price
+    return apply_discount(price, payments.pix_discount_percent)
+
+
+@dataclass(frozen=True)
+class CartLine:
+    unit_price: Decimal  # final price (promotion already applied)
+    quantity: int
+    promotional: bool
+
+    @property
+    def total(self) -> Decimal:
+        return self.unit_price * self.quantity
+
+
+@dataclass(frozen=True)
+class PaymentOptions:
+    total: Decimal  # credit card, debit or boleto (no discount)
+    pix_total: Decimal
+    max_installments: int
+    installments: list[tuple[int, Decimal]]  # (n, value of each installment), interest-free
+    combined_payment_allowed: bool
+
+
+def payment_options(lines: Sequence[CartLine], payments: PaymentsConfig) -> PaymentOptions:
+    total = sum((line.total for line in lines), Decimal(0))
+    pix_total = sum(
+        (pix_price(line.total, line.promotional, payments) for line in lines), Decimal(0)
+    )
+    bands = payments.installment_bands
+    max_n = max_installments(total, bands)
+    return PaymentOptions(
+        total=total,
+        pix_total=pix_total,
+        max_installments=max_n,
+        installments=[(n, to_cents(total / n)) for n in range(1, max_n + 1)],
+        # "acima de R$ 2.000,00" → strictly above
+        combined_payment_allowed=total > _dec(payments.combined_payment_min_total),
+    )

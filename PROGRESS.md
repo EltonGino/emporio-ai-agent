@@ -13,11 +13,11 @@ Update this file in the same commit as every plan step (see AGENTS.md §0 and §
 
 ## Next step
 
-Step 9 — `feat(tools): payment rules` (+ tests) (AGENTS.md §7 `calculate_payment_options`,
-§14 boundaries R$ 240 → 3x, R$ 480 → 6x, R$ 1.200 → 12x). Pure functions in
-`client/rules.py` (already holds availability/discount/format_brl); replace
-`profiling._max_installments` with the rules function; add the tool to `build_tools`; add the
-payment summary to `get_product_details` (deferred from step 8).
+Step 10 — `feat(tools): order status and return eligibility with identity check` (+ tests)
+(AGENTS.md §7 `get_order_status`, `check_return_eligibility`; §5.3 D4, D6, D7, D8, E1; §14:
+identity failure is generic, lockout after 5 failures, return windows with a fixed clock).
+Add `get_order_for_customer(order_id, email)` to the repository; the tools need the clock
+(`clock.py`) and per-session failure counting.
 
 ## Plan status
 
@@ -31,7 +31,7 @@ payment summary to `get_product_details` (deferred from step 8).
 | 6 | BM25, dense and hybrid retrievers | done | `feat(retrieval): BM25, dense and hybrid retrievers` (31ab685) |
 | 7 | Retrieval golden set + eval script | done | `feat(evals): retrieval golden set and evaluation script` (fdb9a8e) |
 | 8 | Catalog and promotion tools | done | `feat(tools): catalog and promotion tools` (26bf364); signals in `feat(tools): partial-match and accessory signals in product search` |
-| 9 | Payment rules | pending | |
+| 9 | Payment rules | done | `feat(tools): payment rules` |
 | 10 | Order status + return eligibility | pending | |
 | 11 | Store status, policy search, handoff | pending | |
 | 12 | Persona prompt + agent with memory | pending | |
@@ -393,6 +393,23 @@ payment summary to `get_product_details` (deferred from step 8).
      - **Step 15:** routing eval cases "vocês vendem cordas?" (expect the accessory explanation,
        no product pitch as if strings were sold) and "quero um violão de 7 cordas" (expect
        `search_products` and 7-string violões in the answer).
+- **Step 9** — Payment rules are pure functions in `client/rules.py` over `client.yaml`:
+  `installment_allowed` (1x always; n needs total / n ≥ the band minimum: 2–3x ≥ R$ 50,
+  4–6x ≥ R$ 80, 7–12x ≥ R$ 100 — P3), `max_installments`, `pix_price` (5% off, **not** on
+  promotional prices, §6.2), `payment_options(lines)`. `profiling.py` now uses
+  `max_installments` (D5 output unchanged: orders 9, 16, 18).
+- **Step 9** — PIX is computed per cart line (5% of line total, rounded to cents) and summed;
+  card/debit/boleto pay the cart total (promotions applied, no further discount).
+  Installments are interest-free (§3), each `total / n` rounded to cents (sums may differ
+  from the total by a few cents — a real checkout adjusts one installment). Combined payment
+  needs total **strictly above** R$ 2.000 ("acima de"), on the cart total.
+- **Step 9** — `calculate_payment_options(items)`: duplicates merged; items not for sale
+  (not found, esgotado, descontinuado, em_breve, or quantity above stock, with
+  `available_quantity`) are listed in `not_for_sale` and left out of the totals; if nothing
+  is left → `{"error":"nothing_to_sell"}`. It returns every allowed installment as a ready
+  string ("3x de R$ 733,00", ≈ 100 tokens for 12x) so the LLM never divides money.
+  `get_product_details` gained the deferred `payment` summary (PIX price, max installments
+  and value) for sellable products.
 - **Convention** — The "Commit" column holds the commit subject; hashes are in `git log`
   (a commit cannot contain its own hash).
 
@@ -406,7 +423,6 @@ payment summary to `get_product_details` (deferred from step 8).
 - **E1 (new data finding, not in AGENTS.md §5.3):** product 130 is `coming_soon`, but appears in
   order 3 (delivered, 2 units) and order 14 (pending). Handling: status wins for new sales
   (D1); past orders are reported as they are. Detected by the profiler; add to README (step 23).
-- Step 9: replace `profiling._max_installments` with the `rules.py` installment function.
 - The 1 GB embedding model must be available in CI (step 7's hit@3 ≥ 0.85 pytest needs it) and
   in Docker (step 21): cache it (actions/cache on `data/runtime/models`) / bake it into the
   image or a volume. CI: two jobs (see "CI split" decision); Docker: decide in step 21.
@@ -530,3 +546,14 @@ payment summary to `get_product_details` (deferred from step 8).
 - Files: `src/emporio_agent/client/{matching,repository,tools}.py`, `tests/test_catalog.py`,
   `PROGRESS.md`.
 - Tests: ruff ok, format ok, `pytest -m "not llm"` 132 passed.
+
+### 2026-11-02 00:10 — Step 9: Payment rules
+- Done: pushed step 8 + follow-up (owner approval). Payment rules in `rules.py`;
+  `calculate_payment_options` tool; payment summary in `get_product_details`; profiling uses
+  the rules function.
+- Files: `src/emporio_agent/client/{rules,tools,profiling}.py`, `tests/test_payments.py`,
+  `PROGRESS.md`.
+- Tests: ruff ok, format ok, `pytest -m "not llm"` 154 passed (band boundaries 99.99/100,
+  150, 240, 319.99/320, 480, 699.99/700, 1199.99/1200; combined payment at 2000/2000.01).
+- Notes: Takamine GD20 → R$ 2.199,00, PIX R$ 2.089,05, 12x R$ 183,25 (matches the AGENTS.md §9
+  tone example).

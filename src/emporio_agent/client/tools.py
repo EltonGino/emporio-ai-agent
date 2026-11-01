@@ -21,7 +21,14 @@ from emporio_agent.client.repository import (
     StoreRepository,
     UnknownCategoryError,
 )
-from emporio_agent.client.rules import format_brl
+from emporio_agent.client.rules import (
+    CartLine,
+    format_brl,
+    max_installments,
+    payment_options,
+    pix_price,
+    to_cents,
+)
 from emporio_agent.config import ClientConfig
 
 # Specs shown in search results, in priority order (category-dependent keys, D10).
@@ -71,11 +78,21 @@ class ProductIdArgs(BaseModel):
     product_id: int
 
 
+class CartItem(BaseModel):
+    product_id: int
+    quantity: int = Field(1, ge=1, le=20)
+
+
+class PaymentArgs(BaseModel):
+    items: list[CartItem] = Field(min_length=1, max_length=10)
+
+
 def _decimal(value: float | None) -> Decimal | None:
     return None if value is None else Decimal(str(value))
 
 
 def build_tools(repo: StoreRepository, client: ClientConfig) -> list[BaseTool]:
+    payments = client.payments
     accessory_terms = matching.document_terms(" ".join(client.catalog.non_sold_accessories))
 
     def mentions_accessory(*texts: str | None) -> bool:
@@ -135,6 +152,14 @@ def build_tools(repo: StoreRepository, client: ClientConfig) -> list[BaseTool]:
         data = product_summary(product, specs=product.specs)
         if product.description:  # unreliable descriptions are never shown (D2)
             data["description"] = product.description
+        if product.availability == "disponivel":
+            price, bands = product.final_price, client.payments.installment_bands
+            n = max_installments(price, bands)
+            data["payment"] = {
+                **money("pix_price", pix_price(price, product.promotion is not None, payments)),
+                "max_installments": n,
+                **money("installment", to_cents(price / n)),
+            }
         return to_json(data)
 
     @tool
@@ -143,4 +168,59 @@ def build_tools(repo: StoreRepository, client: ClientConfig) -> list[BaseTool]:
         (e.g. a past Black Friday) is not active."""
         return to_json({"promotions": [product_summary(p) for p in repo.list_active_promotions()]})
 
-    return [search_products, get_product_details, list_active_promotions]
+    @tool(args_schema=PaymentArgs)
+    def calculate_payment_options(items: list[CartItem]) -> str:
+        """Totals for a cart: card/debit/boleto total, PIX total, interest-free installments,
+        combined payment. Use for any question about paying, PIX, installments ("parcelas")."""
+        quantities: dict[int, int] = {}
+        for item in items:
+            quantities[item.product_id] = quantities.get(item.product_id, 0) + item.quantity
+
+        lines, rows, not_for_sale = [], [], []
+        for product_id, quantity in quantities.items():
+            product = repo.get_product(product_id)
+            if product is None:
+                not_for_sale.append({"id": product_id, "reason": "product_not_found"})
+            elif product.availability != "disponivel":
+                not_for_sale.append(
+                    {"id": product_id, "name": product.name, "reason": product.availability}
+                )
+            elif quantity > product.stock:
+                not_for_sale.append(
+                    {
+                        "id": product_id,
+                        "name": product.name,
+                        "reason": "quantity_exceeds_stock",
+                        "available_quantity": product.stock,
+                    }
+                )
+            else:
+                line = CartLine(product.final_price, quantity, product.promotion is not None)
+                lines.append(line)
+                row = {"id": product.id, "name": product.name, "quantity": quantity}
+                row |= money("total", line.total)
+                if product.promotion:
+                    row |= {"promo_percent": product.promotion.percent, "pix_discount": False}
+                rows.append(row)
+        if not lines:
+            return to_json({"error": "nothing_to_sell", "not_for_sale": not_for_sale})
+
+        options = payment_options(lines, payments)
+        result: dict[str, Any] = {
+            "items": rows,
+            **money("total", options.total),  # credit card, debit or boleto
+            **money("pix_total", options.pix_total),
+            "pix_discount_percent": payments.pix_discount_percent,
+            "max_installments": options.max_installments,
+            "installments": [f"{n}x de {format_brl(v)}" for n, v in options.installments],
+            "boleto_clearing_business_days": payments.boleto_clearing_business_days,
+            "combined_payment_allowed": options.combined_payment_allowed,
+            "combined_payment_min_total_text": format_brl(
+                Decimal(str(payments.combined_payment_min_total))
+            ),
+        }
+        if not_for_sale:
+            result["not_for_sale"] = not_for_sale
+        return to_json(result)
+
+    return [search_products, get_product_details, list_active_promotions, calculate_payment_options]

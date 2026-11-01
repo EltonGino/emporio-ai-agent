@@ -23,6 +23,7 @@ from emporio_agent.client.db.loader import (
     normalize_email,
     read_csv,
 )
+from emporio_agent.client.rules import max_installments
 from emporio_agent.config import ClientConfig, get_client_config
 
 POLICY_PDF = "politicas_da_loja.pdf"
@@ -169,15 +170,6 @@ def check_order_totals(data: RawData) -> Finding:
     return finding
 
 
-def _max_installments(total: Decimal, client: ClientConfig) -> int:
-    allowed = 1
-    for band in client.payments.installment_bands:
-        for n in range(band.min_installments, band.max_installments + 1):
-            if n == 1 or total / n >= Decimal(str(band.min_installment)):
-                allowed = n
-    return allowed
-
-
 def check_historical_installments(data: RawData, client: ClientConfig) -> Finding:
     finding = Finding(
         "D5",
@@ -190,7 +182,7 @@ def check_historical_installments(data: RawData, client: ClientConfig) -> Findin
         if not match:
             continue
         used, total = int(match.group(1)), Decimal(order["total_brl"])
-        allowed = _max_installments(total, client)
+        allowed = max_installments(total, client.payments.installment_bands)
         if used > allowed:
             finding.evidence.append(
                 f"order {order['order_id']}: R$ {total} in {used}x "
