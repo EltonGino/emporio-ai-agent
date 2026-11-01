@@ -13,9 +13,9 @@ Update this file in the same commit as every plan step (see AGENTS.md §0 and §
 
 ## Next step
 
-Step 6 — `feat(retrieval): BM25, dense and hybrid retrievers` (AGENTS.md §6). Load chunks with
-`read_chunks(INDEX_DIR / "chunks.json")`, index `chunk.index_text`; extend
-`scripts/build_index.py` to persist the fastembed vectors next to `chunks.json`.
+Step 7 — `feat(evals): retrieval golden set and evaluation script` (AGENTS.md §6 "Eval").
+Use `get_retrievers()` → (bm25, dense, hybrid). Include the weak spots seen in step 6 (see Log)
+in the golden set; report real numbers, tune only after measuring.
 
 ## Plan status
 
@@ -25,8 +25,8 @@ Step 6 — `feat(retrieval): BM25, dense and hybrid retrievers` (AGENTS.md §6).
 | 2 | Config, client.yaml, clock | done | `feat(config): client.yaml, settings and injectable clock` (dad4f86); budget settings in `feat(config): Groq free-tier budget settings` (90e2813) |
 | 3 | SQLite models + CSV loader with cleaning | done | `feat(data): SQLite models and CSV loader with cleaning rules` (5ae77a6) |
 | 4 | Data profiling script | done | `feat(data): data profiling script` (bf0f706) |
-| 5 | PDF ingestion + structure-aware chunking | done | `feat(retrieval): PDF ingestion and structure-aware chunking` |
-| 6 | BM25, dense and hybrid retrievers | pending | |
+| 5 | PDF ingestion + structure-aware chunking | done | `feat(retrieval): PDF ingestion and structure-aware chunking` (c00eb36) |
+| 6 | BM25, dense and hybrid retrievers | done | `feat(retrieval): BM25, dense and hybrid retrievers` |
 | 7 | Retrieval golden set + eval script | pending | |
 | 8 | Catalog and promotion tools | pending | |
 | 9 | Payment rules | pending | |
@@ -117,6 +117,14 @@ Step 6 — `feat(retrieval): BM25, dense and hybrid retrievers` (AGENTS.md §6).
   header/footer on the first/last line of each page. That is enough to rebuild the structure,
   so **pdfplumber (MIT) and PyMuPDF (AGPL-3.0) were not needed** (owner preference: pypdf first,
   pdfplumber second, PyMuPDF only with a strong reason + README license note).
+- **Dense prefixes [VERIFY] (step 6)**: fastembed 0.9.1 `TextEmbedding(model_name, cache_dir=…)`
+  exposes `passage_embed` / `query_embed`, which apply the model's own prefixes; the chosen
+  paraphrase-multilingual-mpnet-base-v2 needs none, and the code would stay correct with an
+  e5-style model. rank-bm25 0.2.2 (`BM25Okapi(corpus, k1=1.5, b=0.75)`), unidecode 1.4.0,
+  numpy 2.5.4, onnxruntime 1.31.1.
+- **Embedding model footprint (step 6, this Mac)**: download ≈ **1.0 GB** into
+  `data/runtime/models/` (gitignored); first run (download + load) 19.4 s; later loads ~0.9 s;
+  embedding the 26 chunks 2.0 s; a hybrid query ≈ 12–21 ms on CPU.
 - Manual §2 hours confirmed from the PDF: Mon–Fri 09:00–18:00, Sat 09:00–13:00, Sun and
   holidays closed.
 
@@ -256,6 +264,29 @@ Step 6 — `feat(retrieval): BM25, dense and hybrid retrievers` (AGENTS.md §6).
   (production path) they would become a table. `INDEX_DIR` constant added to `config.py`.
 - **Step 5** — Fixed-size fallback (~800 chars, ~150 overlap, cut at whitespace) for documents
   without recognizable headings; ids `p1, p2, …`. Unit-tested; not used by the current PDF.
+- **Official contacts (owner decision, 2026-11-01)** — two guarantees on top of the prompt rule,
+  because the manual itself is inconsistent (P1/P2) and retrieved chunks are verbatim:
+  1. **Step 12:** the official WhatsApp/phone, email and address are read from `client.yaml`
+     (`store.phone_whatsapp`, `store.email`, `store.address`) and rendered into the **static
+     part of the system prompt** (cache-friendly prefix), so the agent never depends on
+     `search_policies` for contacts. The prompt also says config contacts win over any
+     contact found in retrieved text.
+  2. **Step 15:** routing/adversarial eval cases "qual o WhatsApp de vocês?" and "qual o e-mail
+     da loja?" must answer **(67) 3341-4444** and **contato@emporiodamusica.com.br**, and must
+     never contain **(67) 3321-4500** or the accented **contato@empóriodamusica.com.br**.
+- **Step 6** — `Retriever` protocol (`base.py`): `search(query, top_k) -> list[RetrievedChunk]`
+  with `chunk`, `score`, `matched_by`. BM25 returns only chunks with score > 0 (no shared term =
+  no match); dense always returns its top_k by cosine (L2-normalized vectors, dot product).
+- **Step 6** — Hybrid = RRF (k=60) over each retriever's top **10** candidates (`depth`);
+  `matched_by` lists the retrievers that ranked the chunk. Ties keep first-seen order (BM25 first).
+- **Step 6** — `core/retrieval/index.py` (not in AGENTS.md §3 layout): builds/persists
+  `chunks.json` + `vectors.npy` + `index_meta.json` (embedding model + sha256 of chunks.json) in
+  `INDEX_DIR`; `index_is_current` makes a model or document change trigger a rebuild;
+  `get_retrievers()` (cached) builds if missing/stale, then loads. BM25 is rebuilt in memory at
+  load (26 chunks: instant). `MODEL_CACHE_DIR = data/runtime/models` (fastembed's default is a
+  temp dir that the OS may wipe).
+- **Step 6** — Unit tests use a hashing bag-of-words `FakeEmbedder`, so `pytest -m "not llm"`
+  needs no model download; real retrieval quality is the step 7 eval's job.
 - **Convention** — The "Commit" column holds the commit subject; hashes are in `git log`
   (a commit cannot contain its own hash).
 
@@ -270,6 +301,9 @@ Step 6 — `feat(retrieval): BM25, dense and hybrid retrievers` (AGENTS.md §6).
   order 3 (delivered, 2 units) and order 14 (pending). Handling: status wins for new sales
   (D1); past orders are reported as they are. Detected by the profiler; add to README (step 23).
 - Step 9: replace `profiling._max_installments` with the `rules.py` installment function.
+- The 1 GB embedding model must be available in CI (step 7's hit@3 ≥ 0.85 pytest needs it) and
+  in Docker (step 21): cache it (actions/cache on `data/runtime/models`) / bake it into the
+  image or a volume. Decide in steps 7/16/21.
 - Chunks are verbatim: chunk 1.2 contains the accented email (P2) and chunk 7 the other
   WhatsApp number (P1). Steps 11/12: contacts must come from `client.yaml` (store status tool /
   prompt), and the prompt must say config contacts win over retrieved text.
@@ -342,3 +376,20 @@ Step 6 — `feat(retrieval): BM25, dense and hybrid retrievers` (AGENTS.md §6).
 - Tests: ruff ok, format ok, `pytest -m "not llm"` 66 passed.
 - Notes: the first noise rule (any line repeated on ≥ half the pages, digits ignored) would
   also drop body lines like "Item 1/Item 2"; a unit test caught it → restricted to page edges.
+
+### 2026-11-01 21:45 — Step 6: BM25, dense and hybrid retrievers
+- Done: pushed step 5 (owner approval); recorded the official-contacts guarantees (Decisions).
+  `base.py` (protocol), `bm25.py` (accent/case-insensitive tokenizer + PT stopwords),
+  `dense.py` (fastembed embedder, cosine retriever), `hybrid.py` (RRF), `index.py`
+  (build/persist/staleness/load); `scripts/build_index.py` now also embeds.
+- Files: `src/emporio_agent/core/retrieval/{base,bm25,dense,hybrid,index}.py`,
+  `src/emporio_agent/config.py` (`MODEL_CACHE_DIR`), `scripts/build_index.py`,
+  `tests/test_retrieval.py`, `pyproject.toml`, `uv.lock`, `PROGRESS.md`.
+- Deps: rank-bm25, unidecode, fastembed, numpy.
+- Tests: ruff ok, format ok, `pytest -m "not llm"` 77 passed.
+- Manual smoke (real model, top-3 sections): BM25 nails exact terms ("boquilha" → 4.4,
+  "PIX … promoção" → 6.2); dense covers paraphrases where BM25 has no match ("em quantas vezes
+  posso parcelar?" → 3.1). Weak spots to put in the golden set: "quanto tempo demora pra chegar
+  em Dourados?" (expected 5.2; neither retriever finds it — the chunk never names a city);
+  "o violão veio com defeito depois de 2 meses" (hybrid [4.2, 0, 10]: RRF lifts chunks that
+  are mid-ranked in both lists over 8.2/8.3, each high in only one).
