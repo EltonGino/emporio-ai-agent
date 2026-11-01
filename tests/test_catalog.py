@@ -16,6 +16,7 @@ from emporio_agent.client.repository import (
 )
 from emporio_agent.client.rules import apply_discount, availability, format_brl
 from emporio_agent.client.tools import build_tools
+from emporio_agent.config import get_client_config
 
 
 @pytest.fixture(scope="module")
@@ -32,7 +33,7 @@ def repo(engine):
 
 @pytest.fixture(scope="module")
 def tools(repo):
-    return {t.name: t for t in build_tools(repo)}
+    return {t.name: t for t in build_tools(repo, get_client_config())}
 
 
 def call(tool, args=None):
@@ -230,3 +231,52 @@ def test_product_details(tools):
 def test_list_active_promotions_tool(tools):
     promos = call(tools["list_active_promotions"])["promotions"]
     assert [p["promo"]["percent"] for p in promos] == [20, 18, 10, 8]
+
+
+# --- partial matches and accessory queries --------------------------------------------------
+
+
+def test_partial_match_reports_missing_terms(repo):
+    found = repo.find_products(ProductFilters(query="ukulele preto"))
+    assert found.partial_match and found.unmatched_terms == ["preto"]
+    assert {p.category for p in found.products} == {"Ukuleles"}  # category word filters
+    assert not found.unavailable  # only exact matches are reported as unavailable
+
+
+def test_full_match_is_not_partial(repo):
+    found = repo.find_products(ProductFilters(query="yamaha preto"))
+    assert ids(found) == [104] and not found.partial_match
+
+
+def test_exact_item_out_of_stock_is_partial_with_unavailable(repo):
+    found = repo.find_products(ProductFilters(query="Giannini GF-3D"))
+    assert found.unmatched_terms == ["gf3d"]
+
+
+def test_search_tool_partial_fields(tools):
+    result = call(tools["search_products"], {"query": "guitarra fender preta"})
+    assert result["partial_match"] is True
+    assert result["unmatched_terms"] == ["preta"]
+    assert "partial_match" not in call(tools["search_products"], {"query": "takamine gd20"})
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        {"query": "cordas"},
+        {"query": "pedal de distorção"},
+        {"query": "violão 7 cordas"},  # flagged, but results still returned
+        {"category": "amplificadores"},
+    ],
+)
+def test_accessory_queries_are_flagged(tools, args):
+    assert call(tools["search_products"], args)["possible_accessory_query"] is True
+
+
+def test_accessory_flag_does_not_block_results(tools):
+    result = call(tools["search_products"], {"query": "violão 7 cordas"})
+    assert {p["id"] for p in result["products"]} == {109, 110, 111, 112}
+
+
+def test_instrument_query_is_not_flagged(tools):
+    assert "possible_accessory_query" not in call(tools["search_products"], {"query": "ukulele"})

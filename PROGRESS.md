@@ -30,7 +30,7 @@ payment summary to `get_product_details` (deferred from step 8).
 | 5 | PDF ingestion + structure-aware chunking | done | `feat(retrieval): PDF ingestion and structure-aware chunking` (c00eb36) |
 | 6 | BM25, dense and hybrid retrievers | done | `feat(retrieval): BM25, dense and hybrid retrievers` (31ab685) |
 | 7 | Retrieval golden set + eval script | done | `feat(evals): retrieval golden set and evaluation script` (fdb9a8e) |
-| 8 | Catalog and promotion tools | done | `feat(tools): catalog and promotion tools` |
+| 8 | Catalog and promotion tools | done | `feat(tools): catalog and promotion tools` (26bf364); signals in `feat(tools): partial-match and accessory signals in product search` |
 | 9 | Payment rules | pending | |
 | 10 | Order status + return eligibility | pending | |
 | 11 | Store status, policy search, handoff | pending | |
@@ -370,9 +370,29 @@ payment summary to `get_product_details` (deferred from step 8).
 - **Step 8** — `client/rules.py` started here with `availability` (D1), `apply_discount`
   (Decimal, ROUND_HALF_UP to cents) and `format_brl`; step 9 adds the payment rules.
   `get_product_details` has **no payment summary yet** (AGENTS.md §7) — it needs step 9's rules.
-- **Step 8** — Tools are created by `build_tools(repo)` (closures over the repository) with
+- **Step 8** — Tools are created by `build_tools(repo, client)` (closures over the repository) with
   pydantic `args_schema`s; later steps extend it. Deps: `rapidfuzz`, `langchain-core` (the rest
   of LangChain arrives with the agent in step 12).
+- **Catalog search signals (owner decision, 2026-11-01) — step 8 follow-up commit.**
+  1. **Partial match:** when no product has every query term, `search_products` returns
+     `partial_match: true` and `unmatched_terms` (normalized terms some/all results lack, e.g.
+     `["preto"]`), so the agent can say with certainty that the exact item isn't in the catalog
+     and present the results as similar items. Only **exact** matches that can't be sold go in
+     `unavailable` (partial matches never do). Supporting change: a query word that names a
+     category acts as a category filter ("ukulele preto" → alternatives are ukuleles, not black
+     violões), skipped when those categories have no candidates ("cordas" → Cordas Orquestrais
+     is empty, so the 7-string violões still match). Singular rule extended: "-ais/-eis" →
+     "-al/-el" (pedais → pedal).
+  2. **Accessories:** if the query or category mentions a term from
+     `catalog.non_sold_accessories` (client.yaml), the result carries
+     `possible_accessory_query: true` (also on the unknown-category error), **without blocking
+     results** ("violão 7 cordas" is a valid instrument search).
+     - **Step 12:** the prompt must use this signal: explain politely that the store sells only
+       instruments (no strings, picks, cables, cases, pedals, amps) and ask whether the customer
+       is looking for an instrument (e.g. a 7-string guitar).
+     - **Step 15:** routing eval cases "vocês vendem cordas?" (expect the accessory explanation,
+       no product pitch as if strings were sold) and "quero um violão de 7 cordas" (expect
+       `search_products` and 7-string violões in the answer).
 - **Convention** — The "Commit" column holds the commit subject; hashes are in `git log`
   (a commit cannot contain its own hash).
 
@@ -502,3 +522,11 @@ payment summary to `get_product_details` (deferred from step 8).
 - Tests: ruff ok, format ok, `pytest -m "not llm"` 122 passed.
 - Notes: query "cordas" (strings, an accessory) matches the 7-string guitars by name; the
   prompt (step 12) handles accessory questions, and step 15 has a routing case for it.
+
+### 2026-11-01 23:30 — Step 8 follow-up: partial-match and accessory signals (owner request)
+- Done: `partial_match` + `unmatched_terms`, `possible_accessory_query`, category words in the
+  query act as a filter, `unavailable` limited to exact matches; `build_tools(repo, client)`
+  now takes the client config. Step 12/15 follow-ups recorded in Decisions.
+- Files: `src/emporio_agent/client/{matching,repository,tools}.py`, `tests/test_catalog.py`,
+  `PROGRESS.md`.
+- Tests: ruff ok, format ok, `pytest -m "not llm"` 132 passed.

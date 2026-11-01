@@ -71,6 +71,13 @@ class ProductSearch:
     products: list[ProductInfo]  # ranked best first
     # With only_available: items matching the query that can't be sold now (to say so).
     unavailable: list[ProductInfo] = field(default_factory=list)
+    # Partial match: no product has every query term; these terms are missing from some or
+    # all of the results (e.g. ["preto"]), so the exact item is not in the catalog.
+    unmatched_terms: list[str] = field(default_factory=list)
+
+    @property
+    def partial_match(self) -> bool:
+        return bool(self.unmatched_terms)
 
 
 class UnknownCategoryError(ValueError):
@@ -119,13 +126,44 @@ def _search_text(product: ProductInfo) -> set[str]:
     return matching.document_terms(" ".join(words))
 
 
-def _best_matches(scored: list[tuple[float, ProductInfo]]) -> list[ProductInfo]:
-    """Products matching every term; if none, those matching at least half of the terms.
-    Ranked by match, then by final price (cheapest first)."""
+def _rank(terms: list[str], candidates: list[ProductInfo]) -> tuple[list[ProductInfo], list[str]]:
+    """Products matching every term; if none, those matching at least half of the terms
+    (partial match). Ranked by match, then by final price (cheapest first).
+    Also returns the terms some returned product lacks (empty for a full match)."""
+    docs = {p.id: _search_text(p) for p in candidates}
+    scored = [(matching.match_score(terms, docs[p.id]), p) for p in candidates]
     full = [(s, p) for s, p in scored if s == 1.0]
     chosen = full or [(s, p) for s, p in scored if s >= 0.5]
     chosen.sort(key=lambda sp: (-sp[0], sp[1].final_price, sp[1].id))
-    return [p for _, p in chosen]
+    products = [p for _, p in chosen]
+    unmatched = [
+        t for t in terms if not all(matching.term_matches(t, docs[p.id]) for p in products)
+    ]
+    return products, unmatched
+
+
+def _matching_categories(categories: list[Category], name: str) -> set[str]:
+    """Categories whose name (or, failing that, description) matches every term."""
+    terms = matching.query_terms(name)
+    for field_name in ("name", "description"):
+        found = {
+            c.name
+            for c in categories
+            if terms
+            and matching.match_score(terms, matching.document_terms(getattr(c, field_name))) == 1.0
+        }
+        if found:
+            return found
+    raise UnknownCategoryError(name, [c.name for c in categories])
+
+
+def _named_categories(categories: list[Category], terms: list[str]) -> set[str]:
+    """Categories named by a query word ("ukulele preto" → Ukuleles)."""
+    return {
+        c.name
+        for c in categories
+        if any(matching.term_matches(t, matching.document_terms(c.name)) for t in terms)
+    }
 
 
 class SqlStoreRepository:
@@ -141,29 +179,14 @@ class SqlStoreRepository:
         )
         return [_to_info(p) for p in session.scalars(stmt)]
 
-    def _category_ids(self, session: Session, name: str) -> list[int]:
-        """Categories whose name (or, failing that, description) matches every term."""
-        categories = list(session.scalars(select(Category).order_by(Category.category_id)))
-        terms = matching.query_terms(name)
-        for field_name in ("name", "description"):
-            ids = [
-                c.category_id
-                for c in categories
-                if matching.match_score(terms, matching.document_terms(getattr(c, field_name)))
-                == 1.0
-            ]
-            if terms and ids:
-                return ids
-        raise UnknownCategoryError(name, [c.name for c in categories])
-
     def find_products(self, filters: ProductFilters) -> ProductSearch:
         with Session(self._engine) as session:
-            conditions = []
-            if filters.category:
-                ids = self._category_ids(session, filters.category)
-                conditions.append(Product.category_id.in_(ids))
-            candidates = self._products(session, *conditions)
+            categories = list(session.scalars(select(Category).order_by(Category.category_id)))
+            candidates = self._products(session)
 
+        if filters.category:
+            allowed = _matching_categories(categories, filters.category)
+            candidates = [p for p in candidates if p.category in allowed]
         candidates = [
             p
             for p in candidates
@@ -171,15 +194,21 @@ class SqlStoreRepository:
             and (filters.max_price is None or p.final_price <= filters.max_price)
         ]
         terms = matching.query_terms(filters.query or "")
-        scored = [(matching.match_score(terms, _search_text(p)), p) for p in candidates]
-        if not filters.only_available:
-            return ProductSearch(_best_matches(scored))
+        # A query word naming a category acts as a filter, so alternatives for "ukulele preto"
+        # are ukuleles; skipped when those categories are empty ("cordas" → Cordas Orquestrais).
+        named = _named_categories(categories, terms)
+        in_named = [p for p in candidates if p.category in named]
+        if in_named:
+            candidates = in_named
 
-        available = [(s, p) for s, p in scored if p.availability == "disponivel"]
-        unavailable = []
-        if terms:  # a named search for something we can't sell now is worth reporting
-            unavailable = [p for p in _best_matches(scored) if p.availability != "disponivel"]
-        return ProductSearch(_best_matches(available), unavailable[:MAX_UNAVAILABLE_MATCHES])
+        unavailable: list[ProductInfo] = []
+        if filters.only_available:
+            matches, partial = _rank(terms, candidates)
+            if terms and not partial:  # the exact item exists but can't be sold now: say so
+                unavailable = [p for p in matches if p.availability != "disponivel"]
+            candidates = [p for p in candidates if p.availability == "disponivel"]
+        products, unmatched = _rank(terms, candidates)
+        return ProductSearch(products, unavailable[:MAX_UNAVAILABLE_MATCHES], unmatched)
 
     def get_product(self, product_id: int) -> ProductInfo | None:
         with Session(self._engine) as session:

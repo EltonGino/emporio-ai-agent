@@ -27,6 +27,8 @@ def _singular(word: str) -> str:
         return word
     if word.endswith(("oes", "aes")):
         return word[:-3] + "ao"  # violões → violao
+    if word.endswith(("ais", "eis")):
+        return word[:-2] + "l"  # pedais → pedal
     return word[:-1] if word.endswith("s") else word
 
 

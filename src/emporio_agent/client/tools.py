@@ -14,6 +14,7 @@ from typing import Any
 from langchain_core.tools import BaseTool, tool
 from pydantic import BaseModel, Field
 
+from emporio_agent.client import matching
 from emporio_agent.client.repository import (
     ProductFilters,
     ProductInfo,
@@ -21,6 +22,7 @@ from emporio_agent.client.repository import (
     UnknownCategoryError,
 )
 from emporio_agent.client.rules import format_brl
+from emporio_agent.config import ClientConfig
 
 # Specs shown in search results, in priority order (category-dependent keys, D10).
 KEY_SPECS = ("strings", "electronics", "top", "keys", "type", "pieces", "shells", "body")
@@ -73,7 +75,13 @@ def _decimal(value: float | None) -> Decimal | None:
     return None if value is None else Decimal(str(value))
 
 
-def build_tools(repo: StoreRepository) -> list[BaseTool]:
+def build_tools(repo: StoreRepository, client: ClientConfig) -> list[BaseTool]:
+    accessory_terms = matching.document_terms(" ".join(client.catalog.non_sold_accessories))
+
+    def mentions_accessory(*texts: str | None) -> bool:
+        terms = matching.query_terms(" ".join(t for t in texts if t))
+        return any(matching.term_matches(t, accessory_terms) for t in terms)
+
     @tool(args_schema=SearchProductsArgs)
     def search_products(
         query: str | None = None,
@@ -85,8 +93,10 @@ def build_tools(repo: StoreRepository) -> list[BaseTool]:
     ) -> str:
         """Search the instrument catalog: price, promotion, availability, alternatives.
         Use for any product question. availability: disponivel | esgotado (out of stock) |
-        descontinuado | em_breve (not for sale yet). `unavailable` = matches that can't be
-        sold now; then offer available alternatives."""
+        descontinuado | em_breve (not for sale yet). `unavailable` = exact matches that can't
+        be sold now; then offer available alternatives. `partial_match` = the exact item isn't
+        in the catalog (`unmatched_terms` missing); results are only similar items.
+        `possible_accessory_query` = the query names an accessory the store doesn't sell."""
         filters = ProductFilters(
             query=query,
             category=category,
@@ -94,20 +104,27 @@ def build_tools(repo: StoreRepository) -> list[BaseTool]:
             max_price=_decimal(max_price),
             only_available=only_available,
         )
+        # Not blocking: "violão 7 cordas" is a valid instrument search.
+        accessory = (
+            {"possible_accessory_query": True} if mentions_accessory(query, category) else {}
+        )
         try:
             found = repo.find_products(filters)
         except UnknownCategoryError as exc:
-            return to_json({"error": "unknown_category", "categories": exc.known})
+            return to_json({"error": "unknown_category", "categories": exc.known, **accessory})
         result: dict[str, Any] = {
             "total_matches": len(found.products),
             "products": [product_summary(p) for p in found.products[:limit]],
         }
+        if found.partial_match:
+            result["partial_match"] = True
+            result["unmatched_terms"] = found.unmatched_terms
         if found.unavailable:
             result["unavailable"] = [
                 {"id": p.id, "name": p.name, "availability": p.availability}
                 for p in found.unavailable
             ]
-        return to_json(result)
+        return to_json(result | accessory)
 
     @tool(args_schema=ProductIdArgs)
     def get_product_details(product_id: int) -> str:
