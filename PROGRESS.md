@@ -13,16 +13,16 @@ Update this file in the same commit as every plan step (see AGENTS.md §0 and §
 
 ## Next step
 
-Step 3 — `feat(data): SQLite models and CSV loader with cleaning rules` (AGENTS.md §5.1, §5.3).
-Use `get_settings().database_url` and `PROJECT_ROOT / "data/raw"`; CSVs are CRLF (see step 1).
+Step 4 — `feat(data): data profiling script` (AGENTS.md §5.3). Detect and print D1–D10 and
+P1–P4, plus the extra finding E1 (see Known issues). Reuse `read_csv` from the loader.
 
 ## Plan status
 
 | # | Step | Status | Commit |
 |---|---|---|---|
 | 1 | Project scaffold | done | `chore: project scaffold` (de38bce) |
-| 2 | Config, client.yaml, clock | done | `feat(config): client.yaml, settings and injectable clock` (dad4f86); budget settings in `feat(config): Groq free-tier budget settings` |
-| 3 | SQLite models + CSV loader with cleaning | pending | |
+| 2 | Config, client.yaml, clock | done | `feat(config): client.yaml, settings and injectable clock` (dad4f86); budget settings in `feat(config): Groq free-tier budget settings` (90e2813) |
+| 3 | SQLite models + CSV loader with cleaning | done | `feat(data): SQLite models and CSV loader with cleaning rules` |
 | 4 | Data profiling script | pending | |
 | 5 | PDF ingestion + structure-aware chunking | pending | |
 | 6 | BM25, dense and hybrid retrievers | pending | |
@@ -102,6 +102,13 @@ Use `get_settings().database_url` and `PROJECT_ROOT / "data/raw"`; CSVs are CRLF
   `.env` (e.g. `AGENT_NOW=`) mean "use the default".
 - Store timezone `America/Campo_Grande` = UTC-04:00 (no DST since 2019), checked with zoneinfo
   + the `tzdata` package (added so slim Docker images have the tz database).
+- SQLAlchemy 2.1.6: `Numeric(10, 2)` round-trips `Decimal` on SQLite without warnings; `JSON`
+  column stores/returns dicts. Money is `Decimal` end to end (no float rounding in rules).
+- Data shape (2026-11-01): 65 products with IDs **81–145** (so the numbers in AGENTS.md §5.3 D1
+  — "136 discontinued with 13 in stock", "130 coming_soon with 2", "96 active with 0",
+  "113 discontinued, 0" — are **product IDs**, and they match the data); 9 categories,
+  50 customers, 20 orders, 22 order items, 25 promotions. Statuses: 62 active, 2 discontinued
+  (113, 136), 1 coming_soon (130).
 - Manual §2 hours confirmed from the PDF: Mon–Fri 09:00–18:00, Sat 09:00–13:00, Sun and
   holidays closed.
 
@@ -171,6 +178,25 @@ Use `get_settings().database_url` and `PROJECT_ROOT / "data/raw"`; CSVs are CRLF
   7. **LLM evals on gpt-oss-20b** (step 15): an option (pytest `--llm-model`, also usable via
      `LLM_MODEL`/`LLM_FALLBACK_MODELS` env) to run routing/adversarial evals on
      `openai/gpt-oss-20b` and spare the 120b quota.
+- **Step 3** — Column names mirror the CSVs (`product_id`, `price_brl`, …). `order_items` gets a
+  surrogate `id` (the CSV has no key). Status columns have CHECK constraints; SQLite foreign
+  keys are switched on per connection (`PRAGMA foreign_keys = ON`).
+- **Step 3** — The loader only drops/rebuilds the **store tables** (`STORE_MODELS`). Runtime
+  tables (`handoffs` step 11, `sessions` step 17) are created if missing and never dropped, so
+  rebuilding the catalog doesn't erase handoffs or sessions. They must not have foreign keys
+  to store tables (or the drop would fail).
+- **Step 3** — Cleaning: strip every field; emails lowercased (identity check compares
+  normalized emails); empty optional order fields → NULL; dates parsed; `is_active` must be
+  0/1; unknown statuses fail the load with the file name. Order totals kept as paid (D4).
+- **Step 3** — D2 is applied as a fixed ID set `range(135, 145)` in the loader (documented
+  constant). 8 of the 10 descriptions name another brand/model or contradict specs (88 vs 61
+  keys, 5 vs 4 strings); 138 (StingRay) and 141 (Stage Custom) match the brand but belong to
+  the same synthetic batch with generic names ("Bass 4X", "Kit 3 Studio"), so they are
+  distrusted too, per AGENTS.md. The profiling script (step 4) prints the evidence.
+- **Step 3** — `ensure_store_data(engine)` builds the store tables only if `products` doesn't
+  exist (checked with `inspect().has_table`, works on Postgres too); for API startup (step 17).
+- **Step 3** — Engine lives in `client/db/engine.py` (`make_engine(url=None)`), not listed in
+  AGENTS.md §3; creates the SQLite parent directory.
 - **Convention** — The "Commit" column holds the commit subject; hashes are in `git log`
   (a commit cannot contain its own hash).
 
@@ -181,6 +207,10 @@ Use `get_settings().database_url` and `PROJECT_ROOT / "data/raw"`; CSVs are CRLF
 - 8K TPM per model may still be tight for multi-tool turns without cache hits — measure in
   step 12 with the owner's key; recalibrate `DAILY_MESSAGE_CAP`.
 - The persona prompt path in `client.yaml` points to a file created in step 12.
+- **E1 (new data finding, not in AGENTS.md §5.3):** product 130 is `coming_soon`, but appears in
+  order 3 (delivered, 2 units) and order 14 (pending). Proposed handling: status wins for new
+  sales (D1); past orders are reported as they are. Add to the profiling script (step 4) and
+  the README data section.
 
 ## Log
 
@@ -221,3 +251,13 @@ Use `get_settings().database_url` and `PROJECT_ROOT / "data/raw"`; CSVs are CRLF
   `DAILY_MESSAGE_CAP`, `HISTORY_MAX_TOKENS`; `MAX_MESSAGES_PER_SESSION` default 15.
 - Files: `src/emporio_agent/config.py`, `tests/test_config.py`, `.env.example`, `PROGRESS.md`.
 - Tests: ruff ok, format ok, `pytest -m "not llm"` 24 passed.
+
+### 2026-11-01 19:40 — Step 3: SQLite models + CSV loader
+- Done: SQLAlchemy 2.x typed models for the 6 store tables; engine factory with SQLite FK
+  pragma; CSV loader with cleaning rules (D2, D3, D4, D8, D10 applied); `ensure_store_data`;
+  `scripts/build_db.py`.
+- Files: `src/emporio_agent/client/__init__.py`, `client/db/{__init__,models,engine,loader}.py`,
+  `scripts/build_db.py`, `tests/test_db_loader.py`, `pyproject.toml`, `uv.lock`.
+- Deps: sqlalchemy 2.1.6.
+- Tests: ruff ok, format ok, `pytest -m "not llm"` 38 passed. `uv run python
+  scripts/build_db.py` builds `data/runtime/store.db` (gitignored).
