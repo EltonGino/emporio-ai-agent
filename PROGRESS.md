@@ -13,9 +13,9 @@ Update this file in the same commit as every plan step (see AGENTS.md §0 and §
 
 ## Next step
 
-Step 5 — `feat(retrieval): PDF ingestion and structure-aware chunking` (AGENTS.md §6).
-pypdf is already a dependency (added in step 4); resolve the pymupdf [VERIFY] — note that
-PyMuPDF is AGPL-3.0, which matters for a client deliverable.
+Step 6 — `feat(retrieval): BM25, dense and hybrid retrievers` (AGENTS.md §6). Load chunks with
+`read_chunks(INDEX_DIR / "chunks.json")`, index `chunk.index_text`; extend
+`scripts/build_index.py` to persist the fastembed vectors next to `chunks.json`.
 
 ## Plan status
 
@@ -24,8 +24,8 @@ PyMuPDF is AGPL-3.0, which matters for a client deliverable.
 | 1 | Project scaffold | done | `chore: project scaffold` (de38bce) |
 | 2 | Config, client.yaml, clock | done | `feat(config): client.yaml, settings and injectable clock` (dad4f86); budget settings in `feat(config): Groq free-tier budget settings` (90e2813) |
 | 3 | SQLite models + CSV loader with cleaning | done | `feat(data): SQLite models and CSV loader with cleaning rules` (5ae77a6) |
-| 4 | Data profiling script | done | `feat(data): data profiling script` |
-| 5 | PDF ingestion + structure-aware chunking | pending | |
+| 4 | Data profiling script | done | `feat(data): data profiling script` (bf0f706) |
+| 5 | PDF ingestion + structure-aware chunking | done | `feat(retrieval): PDF ingestion and structure-aware chunking` |
 | 6 | BM25, dense and hybrid retrievers | pending | |
 | 7 | Retrieval golden set + eval script | pending | |
 | 8 | Catalog and promotion tools | pending | |
@@ -110,6 +110,13 @@ PyMuPDF is AGPL-3.0, which matters for a client deliverable.
   "113 discontinued, 0" — are **product IDs**, and they match the data); 9 categories,
   50 customers, 20 orders, 22 order items, 25 promotions. Statuses: 62 active, 2 discontinued
   (113, 136), 1 coming_soon (130).
+- **PDF extraction [VERIFY] (step 5)**: pypdf 6.21.4 default `extract_text()` returns this PDF
+  one word per line (words separated by `"\n \n"`), as AGENTS.md warned. `extract_text(
+  extraction_mode="layout")` (still pypdf, BSD) keeps real lines and indentation: headings at
+  column 0, bullets/numbered items indented, table cells separated by 3+ spaces, running
+  header/footer on the first/last line of each page. That is enough to rebuild the structure,
+  so **pdfplumber (MIT) and PyMuPDF (AGPL-3.0) were not needed** (owner preference: pypdf first,
+  pdfplumber second, PyMuPDF only with a strong reason + README license note).
 - Manual §2 hours confirmed from the PDF: Mon–Fri 09:00–18:00, Sat 09:00–13:00, Sun and
   holidays closed.
 
@@ -129,6 +136,9 @@ PyMuPDF is AGPL-3.0, which matters for a client deliverable.
 
   Commits already pushed (de38bce … 5ae77a6) are left as they are — never amend or rewrite
   them. Still no AI attribution trailers.
+- **Workflow (owner rule, 2026-11-01)** — after each step: lint + tests, update this file,
+  commit, **stop** and summarize for review. When the owner approves a step, **push it
+  (`git push origin main`, never force)** before starting the next one.
 
 - **Step 1** — The PDF arrived as `políticas_da_loja.pdf` (accented). Renamed to
   `politicas_da_loja.pdf` to match AGENTS.md §1 and `retrieval.documents`; content untouched.
@@ -224,6 +234,28 @@ PyMuPDF is AGPL-3.0, which matters for a client deliverable.
   `rules.py` function** so the band logic exists once.
 - **Step 4** — D7 measures staleness against the last order date in the data (2026-03-22),
   not the wall clock, so the output is stable.
+- **Step 5** — Ingestion pipeline (`core/retrieval/ingest.py`, client-agnostic): layout text →
+  `clean_lines` (drop running headers/footers: the first/last line of a page whose text, digits
+  ignored, repeats at a page edge on ≥ half the pages — so "Página 3" == "Página 4"; body lines
+  are never dropped) → `build_blocks` (heading = unindented line matching `heading_pattern`;
+  bullet = indented `•`/`N.`; table row = 3+ space gap; indented continuation lines join the
+  previous bullet or the last table cell; prose lines join the previous paragraph unless it
+  ends with `. ! ?`) → `render_blocks` → chunks.
+- **Step 5** — Tables are rendered as self-contained rows using the header row:
+  `- Forma: PIX; Condições: Pagamento à vista; Observações: 5% de desconto sobre o preço de
+  tabela`, so a single row retrieved/quoted still makes sense. Bullets render as `- `, numbered
+  items keep their number (`- 1. Saudação: …`).
+- **Step 5** — Chunking: one chunk per subsection; a section's own intro text (before its first
+  subsection, e.g. §4, §7) is a chunk with the section id; sections with no own text (§5, §6,
+  §8) produce none. Text before the first heading (the cover) is chunk `"0"`, titled by its
+  first line. Result: **26 chunks**, all < 900 chars (≈ < 250 tokens, inside the 512-token
+  embedding window). The page of a chunk is where its heading is (5.2: heading p4, body p5).
+- **Step 5** — **Chunks are stored in `data/runtime/index/chunks.json`**, not in a DB "chunks
+  table" as AGENTS.md §6 says: chunks and their vectors (step 6) live and are rebuilt together
+  in the index dir, and retrieval stays independent of the store DB. With Postgres+pgvector
+  (production path) they would become a table. `INDEX_DIR` constant added to `config.py`.
+- **Step 5** — Fixed-size fallback (~800 chars, ~150 overlap, cut at whitespace) for documents
+  without recognizable headings; ids `p1, p2, …`. Unit-tested; not used by the current PDF.
 - **Convention** — The "Commit" column holds the commit subject; hashes are in `git log`
   (a commit cannot contain its own hash).
 
@@ -238,6 +270,9 @@ PyMuPDF is AGPL-3.0, which matters for a client deliverable.
   order 3 (delivered, 2 units) and order 14 (pending). Handling: status wins for new sales
   (D1); past orders are reported as they are. Detected by the profiler; add to README (step 23).
 - Step 9: replace `profiling._max_installments` with the `rules.py` installment function.
+- Chunks are verbatim: chunk 1.2 contains the accented email (P2) and chunk 7 the other
+  WhatsApp number (P1). Steps 11/12: contacts must come from `client.yaml` (store status tool /
+  prompt), and the prompt must say config contacts win over retrieved text.
 
 ## Log
 
@@ -297,3 +332,13 @@ PyMuPDF is AGPL-3.0, which matters for a client deliverable.
 - Deps: pypdf 6.21.4.
 - Tests: ruff ok, format ok, `pytest -m "not llm"` 52 passed. Script output matches every
   number in AGENTS.md §5.3 (D4 orders 3/20; D5 orders 9/16/18; D9 categories 6/7/8; …).
+
+### 2026-11-01 21:00 — Step 5: PDF ingestion + structure-aware chunking
+- Done: pushed step 4 (owner approval). `core/retrieval/ingest.py` (layout extraction, header/
+  footer removal, block rebuild, table rendering, heading chunking, fixed-size fallback,
+  chunks JSON read/write); `scripts/build_index.py` writes `data/runtime/index/chunks.json`.
+- Files: `src/emporio_agent/core/__init__.py`, `core/retrieval/{__init__,ingest}.py`,
+  `src/emporio_agent/config.py` (`INDEX_DIR`), `scripts/build_index.py`, `tests/test_ingest.py`.
+- Tests: ruff ok, format ok, `pytest -m "not llm"` 66 passed.
+- Notes: the first noise rule (any line repeated on ≥ half the pages, digits ignored) would
+  also drop body lines like "Item 1/Item 2"; a unit test caught it → restricted to page edges.

@@ -16,6 +16,7 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CLIENT_CONFIG_PATH = PROJECT_ROOT / "config" / "client.yaml"
+INDEX_DIR = PROJECT_ROOT / "data" / "runtime" / "index"  # chunks + vectors, rebuilt by script
 
 Weekday = Literal["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 WEEKDAYS: tuple[Weekday, ...] = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
