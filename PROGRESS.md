@@ -13,8 +13,9 @@ Update this file in the same commit as every plan step (see AGENTS.md §0 and §
 
 ## Next step
 
-Step 4 — `feat(data): data profiling script` (AGENTS.md §5.3). Detect and print D1–D10 and
-P1–P4, plus the extra finding E1 (see Known issues). Reuse `read_csv` from the loader.
+Step 5 — `feat(retrieval): PDF ingestion and structure-aware chunking` (AGENTS.md §6).
+pypdf is already a dependency (added in step 4); resolve the pymupdf [VERIFY] — note that
+PyMuPDF is AGPL-3.0, which matters for a client deliverable.
 
 ## Plan status
 
@@ -22,8 +23,8 @@ P1–P4, plus the extra finding E1 (see Known issues). Reuse `read_csv` from the
 |---|---|---|---|
 | 1 | Project scaffold | done | `chore: project scaffold` (de38bce) |
 | 2 | Config, client.yaml, clock | done | `feat(config): client.yaml, settings and injectable clock` (dad4f86); budget settings in `feat(config): Groq free-tier budget settings` (90e2813) |
-| 3 | SQLite models + CSV loader with cleaning | done | `feat(data): SQLite models and CSV loader with cleaning rules` |
-| 4 | Data profiling script | pending | |
+| 3 | SQLite models + CSV loader with cleaning | done | `feat(data): SQLite models and CSV loader with cleaning rules` (5ae77a6) |
+| 4 | Data profiling script | done | `feat(data): data profiling script` |
 | 5 | PDF ingestion + structure-aware chunking | pending | |
 | 6 | BM25, dense and hybrid retrievers | pending | |
 | 7 | Retrieval golden set + eval script | pending | |
@@ -116,6 +117,19 @@ P1–P4, plus the extra finding E1 (see Known issues). Reuse `read_csv` from the
 
 <!-- Anything not in AGENTS.md, or changed from it, with the reason. -->
 
+- **Commit messages (owner rule, 2026-11-01, applies from step 4 on)** — every commit has the
+  conventional title **plus a short English body (2–10 lines) explaining what and why**, e.g.:
+
+  ```
+  feat(data): data profiling script
+
+  Detects and prints the data-quality findings D1–D10, P1–P4 and E1
+  so every cleaning decision in the README is traceable to evidence.
+  ```
+
+  Commits already pushed (de38bce … 5ae77a6) are left as they are — never amend or rewrite
+  them. Still no AI attribution trailers.
+
 - **Step 1** — The PDF arrived as `políticas_da_loja.pdf` (accented). Renamed to
   `politicas_da_loja.pdf` to match AGENTS.md §1 and `retrieval.documents`; content untouched.
   The CSVs were renamed from `desafio_tecnico_ai_eng - <name>.csv` to `<name>.csv`.
@@ -189,14 +203,27 @@ P1–P4, plus the extra finding E1 (see Known issues). Reuse `read_csv` from the
   normalized emails); empty optional order fields → NULL; dates parsed; `is_active` must be
   0/1; unknown statuses fail the load with the file name. Order totals kept as paid (D4).
 - **Step 3** — D2 is applied as a fixed ID set `range(135, 145)` in the loader (documented
-  constant). 8 of the 10 descriptions name another brand/model or contradict specs (88 vs 61
-  keys, 5 vs 4 strings); 138 (StingRay) and 141 (Stage Custom) match the brand but belong to
-  the same synthetic batch with generic names ("Bass 4X", "Kit 3 Studio"), so they are
-  distrusted too, per AGENTS.md. The profiling script (step 4) prints the evidence.
+  constant). The step 4 profiler finds explicit contradictions in **7 of the 10** (another
+  brand or model in the description; 88 vs 61 keys; 5 vs 4 strings): 135, 136, 137, 139, 140,
+  142, 144. 138 (StingRay), 141 (Stage Custom) and 143 (Nord Stage) match the brand but belong
+  to the same synthetic batch with generic names ("Bass 4X", "Kit 3 Studio", "Synth 2 Pro"),
+  so they are distrusted too, per AGENTS.md.
 - **Step 3** — `ensure_store_data(engine)` builds the store tables only if `products` doesn't
   exist (checked with `inspect().has_table`, works on Postgres too); for API startup (step 17).
 - **Step 3** — Engine lives in `client/db/engine.py` (`make_engine(url=None)`), not listed in
   AGENTS.md §3; creates the SQLite parent directory.
+- **Step 4** — Profiling logic lives in `src/emporio_agent/client/profiling.py` (one check per
+  finding, returning id/title/evidence/decision) so it is unit-tested; `scripts/profile_data.py`
+  only prints. Checks read `data/raw` directly (they profile the inputs, not the cleaned DB).
+- **Step 4** — D2 detection heuristic: brands (and model names implying a brand: Jazz Bass,
+  Precision → Fender; StingRay → Music Man) in the description but not in the name, and
+  "N teclas"/"N cordas" vs **numeric** specs only (violões use `strings` = nylon/steel).
+- **Step 4** — P1–P4 are detected on whitespace-normalized pypdf text (crude but enough for
+  regexes); proper ingestion is step 5. pypdf was added here, one step earlier than planned.
+- **Step 4** — D5 uses a local `_max_installments` helper; **step 9 must replace it with the
+  `rules.py` function** so the band logic exists once.
+- **Step 4** — D7 measures staleness against the last order date in the data (2026-03-22),
+  not the wall clock, so the output is stable.
 - **Convention** — The "Commit" column holds the commit subject; hashes are in `git log`
   (a commit cannot contain its own hash).
 
@@ -208,9 +235,9 @@ P1–P4, plus the extra finding E1 (see Known issues). Reuse `read_csv` from the
   step 12 with the owner's key; recalibrate `DAILY_MESSAGE_CAP`.
 - The persona prompt path in `client.yaml` points to a file created in step 12.
 - **E1 (new data finding, not in AGENTS.md §5.3):** product 130 is `coming_soon`, but appears in
-  order 3 (delivered, 2 units) and order 14 (pending). Proposed handling: status wins for new
-  sales (D1); past orders are reported as they are. Add to the profiling script (step 4) and
-  the README data section.
+  order 3 (delivered, 2 units) and order 14 (pending). Handling: status wins for new sales
+  (D1); past orders are reported as they are. Detected by the profiler; add to README (step 23).
+- Step 9: replace `profiling._max_installments` with the `rules.py` installment function.
 
 ## Log
 
@@ -261,3 +288,12 @@ P1–P4, plus the extra finding E1 (see Known issues). Reuse `read_csv` from the
 - Deps: sqlalchemy 2.1.6.
 - Tests: ruff ok, format ok, `pytest -m "not llm"` 38 passed. `uv run python
   scripts/build_db.py` builds `data/runtime/store.db` (gitignored).
+
+### 2026-11-01 20:15 — Step 4: Data profiling script
+- Done: `client/profiling.py` with 15 checks (D1–D10, E1, P1–P4), each with evidence and the
+  decision; `scripts/profile_data.py` prints them. Pushed steps 1–3 (owner request).
+- Files: `src/emporio_agent/client/profiling.py`, `scripts/profile_data.py`,
+  `tests/test_profiling.py`, `pyproject.toml`, `uv.lock`, `PROGRESS.md`.
+- Deps: pypdf 6.21.4.
+- Tests: ruff ok, format ok, `pytest -m "not llm"` 52 passed. Script output matches every
+  number in AGENTS.md §5.3 (D4 orders 3/20; D5 orders 9/16/18; D9 categories 6/7/8; …).
