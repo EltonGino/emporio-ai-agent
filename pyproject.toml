@@ -3,7 +3,12 @@ name = "emporio-ai-agent"
 version = "0.1.0"
 description = "AI customer service agent for retail — built for Empório da Música."
 requires-python = ">=3.12,<3.13"
-dependencies = []
+dependencies = [
+    "pydantic>=2.14.2",
+    "pydantic-settings>=2.16.2",
+    "pyyaml>=6.0.3",
+    "tzdata>=2026.6",
+]
 
 [build-system]
 requires = ["uv_build>=0.13.6,<0.14.0"]

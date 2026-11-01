@@ -1,0 +1,60 @@
+# Client layer: everything specific to Empório da Música that code needs to compute with.
+# The policy manual (data/raw/politicas_da_loja.pdf, v2.1) stays the source for explanations;
+# this file holds the rules extracted from it. See AGENTS.md §4 and §5.3 (P1–P4).
+
+store:
+  name: "Empório da Música"
+  slogan: "Sua música começa aqui."
+  timezone: "America/Campo_Grande"        # UTC-4 — NOT São Paulo
+  address: "Rua 14 de Maio, 3200 — Centro, Campo Grande - MS, 79202-333"
+  phone_whatsapp: "(67) 3341-4444"         # P1: cover + §1.2 table; §7 says 3321-4500
+  email: "contato@emporiodamusica.com.br"  # P2: §1.2 has an accented typo
+  holidays:
+    country: BR
+    subdiv: MS
+    extra: []                              # municipal dates, ISO (YYYY-MM-DD)
+  hours:                                   # manual §2; weekday: [open, close] | null (closed)
+    mon: ["09:00", "18:00"]
+    tue: ["09:00", "18:00"]
+    wed: ["09:00", "18:00"]
+    thu: ["09:00", "18:00"]
+    fri: ["09:00", "18:00"]
+    sat: ["09:00", "13:00"]
+    sun: null
+
+assistant:
+  name: "Tom"
+  persona_prompt: "src/emporio_agent/client/prompts/system.md"
+
+catalog:
+  sells_only_instruments: true
+  non_sold_accessories: [cordas, palhetas, cabos, cases, pedais, amplificadores]
+  partner_stores: []                       # P4: manual names none → never invent
+
+payments:                                  # manual §3, §3.1, §6.2
+  pix_discount_percent: 5
+  pix_applies_to_promotional: false
+  installment_bands:                       # P3: bands win over the §3 table's flat R$ 100
+    - {from: 1, to: 3, min_installment: 50}
+    - {from: 4, to: 6, min_installment: 80}
+    - {from: 7, to: 12, min_installment: 100}
+  combined_payment_min_total: 2000
+  boleto_clearing_business_days: 3
+
+returns:                                   # manual §4
+  regret_days_after_receipt: 7
+  preference_days_after_receipt: 7         # manual says "até 7 dias" without anchor → receipt
+  defect_days_after_purchase: 30
+  legal_warranty_days_after_receipt: 90
+  ineligible_conditions:
+    - "setup/regulagem sob encomenda"
+    - '"venda final" em liquidação'
+    - "boquilhas de sopro"
+
+support:
+  complaint_return_business_hours: 24
+
+retrieval:
+  documents: ["data/raw/politicas_da_loja.pdf"]
+  heading_pattern: '^(\d+(?:\.\d+)?)\.?\s+([A-ZÁÉÍÓÚÂÊÔÃÕÇ].{2,80})$'
+  top_k: 3
