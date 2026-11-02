@@ -10,7 +10,7 @@ from langchain_core.messages import AIMessage
 from sqlalchemy import insert, select, text
 from sqlalchemy.orm import Session
 
-from emporio_agent.api.main import create_app
+from emporio_agent.api.main import LIMIT_MESSAGES, create_app
 from emporio_agent.client.assistant import output_guard
 from emporio_agent.client.db.engine import make_engine
 from emporio_agent.client.db.loader import ensure_store_data
@@ -21,6 +21,7 @@ from emporio_agent.client.tools import build_tools
 from emporio_agent.clock import FixedClock
 from emporio_agent.config import Settings, get_client_config
 from emporio_agent.core.agent import build_agent
+from emporio_agent.core.evals import EMOJI
 from emporio_agent.core.sessions import (
     SqlFailedLookups,
     create_session_tables,
@@ -167,6 +168,12 @@ def test_per_session_limit(make_api):
         assert blocked.status_code == 429
         assert "Nova conversa" in blocked.json()["detail"]
     assert len(model.seen) == 2  # the blocked message never reached the model
+    assert not EMOJI.search(blocked.json()["detail"])  # it may come right after a complaint
+
+
+@pytest.mark.parametrize("kind", sorted(LIMIT_MESSAGES))
+def test_limit_messages_have_no_emoji(kind):
+    assert not EMOJI.search(LIMIT_MESSAGES[kind])
 
 
 def test_daily_cap_across_sessions(make_api):

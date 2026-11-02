@@ -66,18 +66,19 @@ logger = logging.getLogger(__name__)
 
 FRONTEND_DIST = PROJECT_ROOT / "frontend" / "dist"
 DEV_ORIGINS = ["http://localhost:5173", "http://127.0.0.1:5173"]  # Vite dev server
+# No emoji: a limit can be reached right after a complaint (manual §7.1: none in complaints).
 LIMIT_MESSAGES = {
     "session_limit": (
         "Esta conversa chegou ao limite de mensagens da demonstração. "
-        "Clique em “Nova conversa” para continuar 😊"
+        "Clique em “Nova conversa” para continuar."
     ),
     "client_limit": (
         "Você já enviou muitas mensagens hoje nesta demonstração. "
-        "Volte amanhã, vai ser um prazer te atender! 🎶"
+        "Volte amanhã, vai ser um prazer te atender!"
     ),
     "daily_cap": (
         "O atendimento de demonstração atingiu o limite de mensagens de hoje. "
-        "Volte amanhã, vai ser um prazer te atender! 🎶"
+        "Volte amanhã, vai ser um prazer te atender!"
     ),
 }
 

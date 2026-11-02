@@ -1750,4 +1750,10 @@ one customer per conversation). One local commit per fix, no push. Steps 22/23 r
   never a shipping date: there is no shipping date" (≈ 20 tokens). Test on the description and
   value. Live (Ollama 20b, order 8 + Ana's e-mail, 3 runs): no "Data de envio"; one run
   labels it "Data do pedido: 15/02/2026", the others leave the date out.
+- **5. Limit messages without emoji.** The per-conversation limit message had 😊; the
+  per-IP and daily-cap messages had 🎶 and can follow a complaint just as well, so **all
+  three** lost the emoji (the owner named only the conversation one: review). Tests: the
+  429 `detail` and each `LIMIT_MESSAGES` entry have no emoji (evals' `EMOJI` pattern); they
+  failed on the old texts. The frontend shows the server's `detail` (no copy of the texts).
+  No LLM involved, so no live run.
 
