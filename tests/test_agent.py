@@ -652,7 +652,10 @@ def test_system_prompt_has_official_contacts_only():
     assert "(67) 3341-4444" in prompt and "contato@emporiodamusica.com.br" in prompt
     assert "3321-4500" not in prompt and "empóriodamusica" not in prompt
     assert "$" not in prompt.replace("R$", "")  # every placeholder filled
-    assert "Não indique outras lojas." in prompt  # P4: no partner stores
+    assert (  # P4: no partner stores, and no sending the customer elsewhere
+        "Não sugira procurar em outro lugar (outras lojas, lojas especializadas, marketplaces "
+        "ou sites): ofereça ajuda com um instrumento."
+    ) in prompt
 
 
 @pytest.mark.parametrize(
@@ -702,7 +705,7 @@ def test_partner_stores_rule_comes_from_config():
     catalog = client.catalog.model_copy(update={"partner_stores": ["Loja A", "Loja B"]})
     prompt = render_system_prompt(client.model_copy(update={"catalog": catalog}))
     assert "sugira as lojas parceiras: Loja A, Loja B." in prompt
-    assert "Não indique outras lojas." not in prompt
+    assert "Não sugira procurar em outro lugar" not in prompt
 
 
 def test_model_chain_settings(monkeypatch):

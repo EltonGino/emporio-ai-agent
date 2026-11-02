@@ -474,7 +474,12 @@ def render_system_prompt(client: ClientConfig) -> str:
     partners_rule = (
         f"Se fizer sentido, sugira as lojas parceiras: {', '.join(partners)}."
         if partners
-        else "Não indique outras lojas."  # P4: the manual names no partners
+        # P4: the manual names no partners. Video rehearsal: "recomendo procurar lojas
+        # especializadas ou marketplaces" — no store named, still sending the customer away.
+        else (
+            "Não sugira procurar em outro lugar (outras lojas, lojas especializadas, "
+            "marketplaces ou sites): ofereça ajuda com um instrumento."
+        )
     )
     template = Template(client.assistant.persona_prompt.read_text(encoding="utf-8"))
     return template.substitute(

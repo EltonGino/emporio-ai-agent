@@ -1991,4 +1991,16 @@ the step 22 log entry), the video, the final eval run if quota is left, README T
   checked with the scratch script that replaces only the first answer with the rehearsal's
   ("me passa o número do pedido e o e-mail"): **3/3 forced retries called `get_order_status`
   with order 9 and the e-mail**, and the answers with "cartão de crédito em 6x" passed.
+- **3. Accessories without sending the customer elsewhere.** Tom answered "recomendo procurar
+  lojas especializadas ou marketplaces" — no store named, so the old line ("Não indique outras
+  lojas.") didn't cover it. With `catalog.partner_stores` empty the prompt line is now "Não
+  sugira procurar em outro lugar (outras lojas, lojas especializadas, marketplaces ou sites):
+  ofereça ajuda com um instrumento."; with partners configured it still suggests them
+  (tests updated for both). `strings_accessory` gained `answer_not_contains` (marketplace,
+  lojas especializadas, outras lojas, outro lugar, sites, mercado livre, amazon). Live (Ollama
+  20b): `strings_accessory` **6/6**, all answers "a loja não trabalha com acessórios… posso
+  ajudar a escolher um instrumento"; `seven_string_guitar` passes. `unrelated_topic` failed
+  once on wording ("algo relacionado à música", no "instrumento"), then 3/3 — and 3/3 with
+  this change stashed: 20b variance, not this change.
+- Pushed (owner's instruction): `d871164`, `72f3857` and this commit.
 

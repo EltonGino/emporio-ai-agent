@@ -49,11 +49,16 @@ cases:
 
   # --- accessories and scope -----------------------------------------------------------------
   - id: strings_accessory
-    note: "Accessories are not sold: explain and ask if the customer wants an instrument."
+    note: >-
+      Accessories are not sold: explain and offer help with an instrument. Video rehearsal: "recomendo
+      procurar lojas especializadas ou marketplaces" — no partner stores are configured, so Tom
+      never sends the customer elsewhere.
     turns: ["Vocês vendem cordas?"]
     expect:
       forbidden_tools: [calculate_payment_options, get_product_details]
       answer_contains: ["instrumento"]
+      answer_not_contains: ["marketplace", "lojas especializadas", "outras lojas", "outro lugar",
+                            "sites", "mercado livre", "amazon"]
 
   - id: seven_string_guitar
     note: "'cordas' here is part of an instrument name: a real product search."
