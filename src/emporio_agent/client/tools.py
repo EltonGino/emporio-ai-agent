@@ -102,11 +102,11 @@ def product_summary(product: ProductInfo, specs: dict[str, Any] | None = None) -
 
 
 class SearchProductsArgs(BaseModel):
-    query: str | None = Field(None, description="Name, brand, model or feature")
-    category: str | None = Field(None, description="Category, e.g. 'violões', 'ukulele'")
-    min_price: float | None = Field(None, ge=0, description="BRL, final price")
-    max_price: float | None = Field(None, ge=0, description="BRL, final price")
-    only_available: bool = Field(True, description="False to include unsellable items")
+    query: str = Field("", description="Name, brand, model or feature")
+    category: str = Field("", description="e.g. violões, ukulele")
+    min_price: float = Field(0, ge=0, description="BRL, final price")
+    max_price: float = Field(0, ge=0, description="BRL, final price; 0 = no limit")
+    only_available: bool = True
     limit: int = Field(5, ge=1, le=10)
 
 
@@ -125,7 +125,7 @@ class PaymentArgs(BaseModel):
 
 class OrderLookupArgs(BaseModel):
     order_id: int = Field(ge=1)
-    email: str = Field(max_length=254, description="Email used in the purchase")
+    email: str = Field(max_length=254, description="Purchase email")
 
 
 class ReturnArgs(OrderLookupArgs):
@@ -143,9 +143,7 @@ class PolicyQueryArgs(BaseModel):
 class HandoffArgs(BaseModel):
     reason: Literal["complaint", "delayed_order", "manager_question", "unavailable_item", "other"]
     summary: str = Field(min_length=10, max_length=600, description="For the team, in Portuguese")
-    contact: str | None = Field(
-        None, max_length=120, description="Phone/email only if the customer offered it"
-    )
+    contact: str = Field("", max_length=120, description="Customer's own phone/email, if given")
 
 
 def br_datetime(value: datetime) -> str:
@@ -177,8 +175,15 @@ def payment_method_text(method: str) -> str:
     return PAYMENT_METHOD_TEXT.get(method, method)
 
 
-def _decimal(value: float | None) -> Decimal | None:
-    return None if value is None else Decimal(str(value))
+def _limit(value: float) -> Decimal | None:
+    """0 means "no limit" (keeps the tool schema free of nullable fields)."""
+    return Decimal(str(value)) if value else None
+
+
+def _compact_description(tool_: BaseTool) -> BaseTool:
+    """Docstrings → one line: the indentation would otherwise be sent (and billed) per call."""
+    tool_.description = " ".join(tool_.description.split())
+    return tool_
 
 
 def build_tools(
@@ -216,24 +221,23 @@ def build_tools(
 
     @tool(args_schema=SearchProductsArgs)
     def search_products(
-        query: str | None = None,
-        category: str | None = None,
-        min_price: float | None = None,
-        max_price: float | None = None,
+        query: str = "",
+        category: str = "",
+        min_price: float = 0,
+        max_price: float = 0,
         only_available: bool = True,
         limit: int = 5,
     ) -> str:
-        """Search the instrument catalog: price, promotion, availability, alternatives.
-        Use for any product question. availability: disponivel | esgotado (out of stock) |
-        descontinuado | em_breve (not for sale yet). `unavailable` = exact matches that can't
-        be sold now; then offer available alternatives. `partial_match` = the exact item isn't
-        in the catalog (`unmatched_terms` missing); results are only similar items.
-        `possible_accessory_query` = the query names an accessory the store doesn't sell."""
+        """Catalog search (price, promotion, availability, alternatives); use for any product
+        question. availability: disponivel | esgotado | descontinuado | em_breve (not for sale
+        yet). unavailable = exact matches not for sale now → offer alternatives. partial_match =
+        exact item not in the catalog (unmatched_terms); results are only similar.
+        possible_accessory_query = asks for an accessory the store doesn't sell."""
         filters = ProductFilters(
             query=query,
             category=category,
-            min_price=_decimal(min_price),
-            max_price=_decimal(max_price),
+            min_price=_limit(min_price),
+            max_price=_limit(max_price),
             only_available=only_available,
         )
         # Not blocking: "violão 7 cordas" is a valid instrument search.
@@ -260,7 +264,7 @@ def build_tools(
 
     @tool(args_schema=ProductIdArgs)
     def get_product_details(product_id: int) -> str:
-        """Full specs and description of one product (id from search_products)."""
+        """Full specs, description and payment summary of a product (id from search)."""
         product = repo.get_product(product_id)
         if product is None:
             return to_json({"error": "product_not_found"})
@@ -279,14 +283,13 @@ def build_tools(
 
     @tool
     def list_active_promotions() -> str:
-        """Promotions active today, with original and final price. Any other promotion
-        (e.g. a past Black Friday) is not active."""
+        """Promotions active now. Any other (e.g. a past Black Friday) is not active."""
         return to_json({"promotions": [product_summary(p) for p in repo.list_active_promotions()]})
 
     @tool(args_schema=PaymentArgs)
     def calculate_payment_options(items: list[CartItem]) -> str:
-        """Totals for a cart: card/debit/boleto total, PIX total, interest-free installments,
-        combined payment. Use for any question about paying, PIX, installments ("parcelas")."""
+        """Cart totals: card/debit/boleto, PIX, interest-free installments (say
+        installment_summary), combined payment. Use for any payment question."""
         quantities: dict[int, int] = {}
         for item in items:
             quantities[item.product_id] = quantities.get(item.product_id, 0) + item.quantity
@@ -327,7 +330,12 @@ def build_tools(
             **money("pix_total", options.pix_total),
             "pix_discount_percent": payments.pix_discount_percent,
             "max_installments": options.max_installments,
-            "installments": [f"{n}x de {format_brl(v)}" for n, v in options.installments],
+            "installment_summary": (
+                f"até {options.max_installments}x sem juros de "
+                f"{format_brl(options.installments[-1][1])}"
+            ),
+            # Every allowed option, for "e em 10x?"; the summary is what to say by default.
+            "installment_options": [f"{n}x de {format_brl(v)}" for n, v in options.installments],
             "boleto_clearing_business_days": payments.boleto_clearing_business_days,
             "combined_payment_allowed": options.combined_payment_allowed,
             "combined_payment_min_total_text": format_brl(
@@ -340,9 +348,10 @@ def build_tools(
 
     @tool(args_schema=OrderLookupArgs)
     def get_order_status(order_id: int, email: str, config: RunnableConfig) -> str:
-        """Status of the customer's own order. Ask for the order number AND the purchase email
-        first. delayed=true, or pending/confirmed for many days (days_since_order) → acknowledge
-        the wait, offer handoff_to_human, never invent a date."""
+        """The customer's own order; needs order number and purchase email.
+        estimated_delivery is a forecast; days_since_order counts from the purchase. delayed
+        (see days_since_estimated_delivery) or long pending/confirmed → acknowledge the wait,
+        offer the team, never invent dates."""
         order = identified_order(order_id, email, config)
         if isinstance(order, str):
             return order
@@ -360,19 +369,22 @@ def build_tools(
             "payment_method": payment_method_text(order.payment_method),
             "tracking_code": order.tracking_code,
             "estimated_delivery": br_date(eta),
-            # D7: only orders on their way can be late
-            "delayed": order.status in ("confirmed", "shipped") and eta is not None and eta < today,
             "notes": order.notes,
         }
+        # D7: only orders on their way can be late
+        if order.status in ("confirmed", "shipped") and eta is not None and eta < today:
+            data |= {"delayed": True, "days_since_estimated_delivery": (today - eta).days}
+        else:
+            data["delayed"] = False
         return to_json({k: v for k, v in data.items() if v is not None})
 
     @tool(args_schema=ReturnArgs)
     def check_return_eligibility(
         order_id: int, email: str, reason: ReturnReason, config: RunnableConfig
     ) -> str:
-        """Whether a delivered order can be returned/exchanged today and until when.
-        reason: arrependimento (regret) | defeito (defect) | preferencia (other color/model).
-        Ask for order number AND purchase email first."""
+        """Can a delivered order be returned/exchanged today, and until when. reason:
+        arrependimento | defeito | preferencia (other color/model). Needs order number and
+        purchase email."""
         order = identified_order(order_id, email, config)
         if isinstance(order, str):
             return order
@@ -406,18 +418,16 @@ def build_tools(
 
     @tool
     def get_store_status() -> str:
-        """Store open/closed now, today's hours, next opening (holidays included), weekly
-        hours. Use for hours questions or to say when the human team is back."""
+        """Open/closed now, today's and weekly hours, next opening (holidays included)."""
         status = store_status(clock.now(), client.store, calendar)
         return to_json(store_status_data(status) | {"weekly_hours": weekly_hours})
 
     @tool(args_schema=PolicyQueryArgs, response_format="content_and_artifact")
     def search_policies(query: str) -> tuple[str, list[dict[str, Any]]]:
-        """Search the store policy manual: returns, exchanges, warranty, shipping, payment
-        rules, promotions, privacy. Never answer policy from memory. Write a self-contained,
-        policy-oriented query, not the customer's words: "quanto demora pra Dourados?" →
-        "prazo de entrega para outras cidades fora de Campo Grande". Contacts in results may
-        be outdated: use the official contacts from your instructions."""
+        """Policy manual search: returns, warranty, shipping, payment, promotions, privacy.
+        Query: self-contained and policy-oriented, not the customer's words ("quanto demora pra
+        Dourados?" → "prazo de entrega para outras cidades fora de Campo Grande"). Contacts in
+        results may be outdated: use the official contacts."""
         hits = retriever.search(query, client.retrieval.top_k)
         content = to_json(
             {"results": [{"section": h.chunk.section_path, "text": h.chunk.text} for h in hits]}
@@ -438,14 +448,13 @@ def build_tools(
 
     @tool(args_schema=HandoffArgs)
     def handoff_to_human(
-        reason: str, summary: str, config: RunnableConfig, contact: str | None = None
+        reason: str, summary: str, config: RunnableConfig, contact: str = ""
     ) -> str:
-        """Pass the case to the human team and get a protocol number. Use for complaints,
-        delayed orders, return requests, questions the manual doesn't answer or that need
-        the manager. Give the customer the protocol and the return time."""
+        """Open a case for the human team; returns the protocol. For complaints, confirmed
+        return requests, delayed orders and questions the manual can't answer."""
         now = clock.now()
         protocol = repo.create_handoff(
-            reason, summary, contact, identity.session_id(config), created_at=now
+            reason, summary, contact or None, identity.session_id(config), created_at=now
         )
         status = store_status(now, client.store, calendar)
         data: dict[str, Any] = {
@@ -457,7 +466,7 @@ def build_tools(
             data["team_back_at"] = br_datetime(status.next_opening)
         return to_json(data)
 
-    return [
+    tools = [
         search_products,
         get_product_details,
         list_active_promotions,
@@ -468,3 +477,4 @@ def build_tools(
         search_policies,
         handoff_to_human,
     ]
+    return [_compact_description(t) for t in tools]

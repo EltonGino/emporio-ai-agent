@@ -102,7 +102,8 @@ def test_payment_tool_single_product(tools):
     assert result["total_text"] == "R$ 2.199,00"
     assert result["pix_total_text"] == "R$ 2.089,05"
     assert result["max_installments"] == 12
-    assert result["installments"][-1] == "12x de R$ 183,25"
+    assert result["installment_summary"] == "até 12x sem juros de R$ 183,25"
+    assert result["installment_options"][-1] == "12x de R$ 183,25"
     assert result["boleto_clearing_business_days"] == 3
     assert result["combined_payment_allowed"] is True
 

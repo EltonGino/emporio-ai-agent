@@ -13,14 +13,12 @@ Update this file in the same commit as every plan step (see AGENTS.md §0 and §
 
 ## Next step
 
-Step 12 — `feat(agent): persona prompt and tool-calling agent with memory` (AGENTS.md §8, §9).
-Read every Decision tagged "step 12" first: Groq fallback middleware (RateLimitError only),
-reasoning effort/format, token trimming, dynamic context **appended**, official contacts in
-the static prompt, accessory signal, partial-match signal, stale orders (`days_since_order`),
-prompt ~1,200 tokens. Add langchain, langchain-groq, langgraph-checkpoint-sqlite (let uv lock
-compatible versions). Tools: `build_tools(repo, client, clock, retriever)`; session id =
-`configurable.thread_id`. Include an agent test with a fake chat model checking that the tools
-receive the thread id and that only `content` (never reasoning) is emitted.
+Step 13 — `feat(core): event stream and JSONL tracing` (AGENTS.md §8 event list, §13).
+One `AgentEvent` model (`core/events.py`): user_message, token, tool_start, tool_end
+(result preview, duration), retrieval (from the `search_policies` artifact), final (text +
+the turn's token usage: input, cached, output, reasoning, models — `core.agent.TurnUsage`),
+error. JSONL per session in `data/runtime/traces/`. Only `content` is ever streamed (never
+reasoning). `run_turn` becomes a consumer of the stream.
 
 ## Plan status
 
@@ -36,8 +34,8 @@ receive the thread id and that only `content` (never reasoning) is emitted.
 | 8 | Catalog and promotion tools | done | `feat(tools): catalog and promotion tools` (26bf364); signals in `feat(tools): partial-match and accessory signals in product search` |
 | 9 | Payment rules | done | `feat(tools): payment rules` (ebaa394) |
 | 10 | Order status + return eligibility | done | `feat(tools): order status and return eligibility with identity check` (4d14084); `feat(tools): days since order in order status` (ca153a7) |
-| 11 | Store status, policy search, handoff | done | `feat(tools): store status, policy search and human handoff` |
-| 12 | Persona prompt + agent with memory | pending | |
+| 11 | Store status, policy search, handoff | done | `feat(tools): store status, policy search and human handoff` (0ebaac7) |
+| 12 | Persona prompt + agent with memory | done | `feat(agent): persona prompt and tool-calling agent with memory` |
 | 13 | Event stream + JSONL tracing | pending | |
 | 14 | CLI with debug mode | pending | |
 | 15 | Routing + adversarial evals | pending | |
@@ -172,6 +170,37 @@ receive the thread id and that only `content` (never reasoning) is emitted.
   category (ponto facultativo), so the store opens. Campo Grande **municipal** holidays are not
   in the package → `store.holidays.extra` (ISO dates, now validated as `date`), left empty:
   the manual doesn't list them and we don't invent dates.
+- **Agent stack (step 12, 2026-11-02)** — `uv add langchain langchain-groq
+  langgraph-checkpoint-sqlite` locked **langchain 1.4.7, langgraph 1.2.19, langgraph-prebuilt
+  1.1.1, langgraph-checkpoint 4.3.1, langgraph-checkpoint-sqlite 3.1.3, langchain-groq 1.1.3,
+  groq 0.37.1** (newer than the throwaway check; re-verified on these): `create_agent(model,
+  tools, *, system_prompt, middleware, checkpointer, ...)`; `AgentMiddleware.wrap_model_call` /
+  `awrap_model_call`; `ModelRequest.override(model=..., messages=..., system_message=...)`
+  (`system_prompt` deprecated in favour of `system_message`); a middleware may return an
+  `AIMessage`. `ModelFallbackMiddleware` still falls back on **any** exception → custom
+  middleware. `config: RunnableConfig` injection into tools works inside this `create_agent`
+  (tested). `SqliteSaver(sqlite3.connect(path, check_same_thread=False))` for the sync
+  checkpointer; the async variant is for step 17.
+- **Groq measurement (step 12, owner key, 2026-11-02)** — 4 scripted conversations, 9 turns,
+  20 s between messages (`AGENT_NOW` per scenario). Static prefix (prompt + 9 tool schemas +
+  context) ≈ **2,200 input tokens** per call. Per turn: no-tool turn ≈ 2,230; one tool ≈
+  4,700–5,100 (2 calls); search + payment ≈ 8,000 (3 calls). Totals: input 36,550, cached
+  7,424 (20%), output 1,186, reasoning 169 (effort low) → **≈ 3,370 counted tokens per turn**.
+  Caching is partial and irregular (0–2,816 cached per call). 8K TPM per model ⇒ one heavy
+  turn can fill the 120b minute, so the next call falls back to 20b (seen in every run; the
+  fallback works). Earlier runs (before prompt fixes): 3,790 and 3,820 per turn.
+  Capacity: 200K TPD/model ⇒ ≈ 59 turns/day per model, ≈ 175 with the three models →
+  `DAILY_MESSAGE_CAP=60` (default) stays well inside one day's quota. Persona prompt alone ≈
+  1,150 tokens (chars/4).
+- **Groq measurement after the owner's adjustments (step 12, run 4)** — same 4 conversations:
+  input 35,341, cached 2,048, output 1,171, reasoning 170 → **≈ 3,830 counted tokens/turn**
+  (cache hits vary a lot run to run: 2,048–7,424 cached per run). No-tool turn ≈ 2,180 input
+  (was 2,228). Tool schemas: 5,212 → 4,375 chars (≈ 1,303 → 1,093 tokens by chars/4), but the
+  real prefix only dropped ≈ 50 tokens net (the prompt gained two rules, and the provider
+  re-renders tool schemas in its own format, so JSON whitespace mattered less than estimated).
+  **Groq sends `retry-after` on 429** (seen: 4, 11 and 13 s). Model calls: 15; 429s: 3 → 1
+  short wait + retry on the 120b (4 s, succeeded), 2 fallbacks to the 20b (retry-after 11 and
+  13 s, just above the 10 s threshold).
 - Manual §2 hours confirmed from the PDF: Mon–Fri 09:00–18:00, Sat 09:00–13:00, Sun and
   holidays closed.
 
@@ -495,6 +524,73 @@ receive the thread id and that only `content` (never reasoning) is emitted.
   `search_products` ≈ 340, `handoff_to_human` ≈ 200). With a ~1,200-token prompt the static
   prefix is ≈ 2,500 tokens (cached on gpt-oss after the first call). If step 12 measurements
   show TPM pressure, shorten the descriptions first.
+- **Session deletion vs handoffs (owner decision, 2026-11-02) — apply in step 17.**
+  `DELETE /api/sessions/{id}` **anonymizes** the session's handoffs instead of deleting them:
+  set `contact` and `summary` to NULL and drop the `session_id` link; keep `protocol`,
+  `reason`, `created_at` and `status` as the operational record. README note: for a real
+  client this retention choice would be validated with the legal team (LGPD).
+- **Step 12** — Layout: `core/agent.py` (client-agnostic: middlewares, `trim_history`,
+  `build_agent`, `run_turn`, `TurnUsage`) + **`client/assistant.py`** (not in AGENTS.md §3:
+  wires the client layer — Groq model chain, persona prompt rendering, dynamic context,
+  `build_store_agent`). Persona in `client/prompts/system.md` (`string.Template`; `$$` for
+  "R$"); official contacts, name, slogan and the partner-store rule (P4: none → "Não indique
+  outras lojas.") are filled from client.yaml.
+- **Step 12** — `RateLimitFallback` middleware: on an error with `status_code == 429` (any SDK;
+  `groq.RateLimitError` is one), retry the same request on the next model
+  (120b → 20b → qwen3.8-27b); other errors propagate (tested); if every model is rate limited
+  it returns a friendly AIMessage (`RATE_LIMITED_MESSAGE`) instead of failing the turn.
+  ChatGroq `max_retries=0` on all but the last model (2), so a 429 moves on at once.
+- **Step 12** — Reasoning: gpt-oss `reasoning_effort=low`; qwen `reasoning_format="parsed"` +
+  same effort. `run_turn` returns `AIMessage.text` of the final message only (reasoning lives
+  in `additional_kwargs`); a fake-model test proves reasoning never reaches the customer.
+- **Step 12** — `DynamicContext` middleware appends "## Agora / date, time, open/closed, next
+  opening" **after** the static prompt on every model call (tested: system message =
+  static + "\n\n" + context).
+- **Step 12** — `TrimHistory` middleware (`trim_history`): the current turn is always sent in
+  full; past turns are added newest-first as whole turns, **compacted to the customer message
+  and the final answer** (tool calls/results dropped: facts must be re-queried anyway and tool
+  payloads are most of the tokens), within `HISTORY_MAX_MESSAGES` and `HISTORY_MAX_TOKENS`
+  (approximate counter). Never splits a tool call from its result. Full history stays in the
+  checkpointer.
+- **Step 12** — Prompt iterations from the measurement runs (owner asked to see the prompt
+  before committing): (1) the 20b read `estimated_delivery` as a delivery date → tool
+  description says it is a forecast; (2) a model put the **store's** phone as the customer
+  contact → field description + prompt rule; (3) models said "vou abrir/encaminhar" without
+  calling a tool → rule "never announce an action for later: do it now or ask"; delayed orders
+  and eligible returns now **ask** before `handoff_to_human` (complaints register directly);
+  (4) the full installment list was pasted → `calculate_payment_options` now returns
+  `installment_summary` ("até 12x sem juros de R$ 183,25") + `installment_options`, and the
+  prompt says to list options only on request.
+- **Step 12 (owner adjustments before the commit)** — prompt section "## Tom de voz" (not
+  "## Tom", the agent's name); closing question only when the need seems solved; new rule:
+  never mention tool, field or internal names to the customer; the partner-store line is
+  generated from `catalog.partner_stores` (empty → "Não indique outras lojas.", else suggest
+  them; tested both ways). `get_order_status` adds `days_since_estimated_delivery` when
+  delayed and its description says `days_since_order` counts from the purchase.
+- **Step 12** — 429 handling refined (owner): `retry_after(error)` reads the `retry-after`
+  header, else Groq's "try again in 7.66s / 450ms / 1m2.5s" message. If ≤ 10 s
+  (`MAX_RETRY_WAIT_SECONDS`), sleep that + 0.5 s and retry the **same** model once; otherwise
+  (or on a second 429) move to the next model. Sync uses an injectable sleep (tests), async
+  uses `asyncio.sleep`. Logged at INFO (wait) / WARNING (fallback) by `emporio_agent.core.agent`.
+- **Step 12** — Tool descriptions shortened (owner): one-line descriptions (docstring
+  indentation was being sent), non-nullable defaults (`query=""`, `category=""`,
+  `min_price=0`, `max_price=0` = no limit, `contact=""`) so schemas have no `anyOf`/`null`.
+  Rules kept: availability labels, unavailable/partial_match/possible_accessory_query meanings,
+  installment_summary, forecast vs delivery, query rewriting example, official contacts.
+- **Step 12** — Known quality gap: when the 120b is rate limited mid-turn the 20b writes the
+  answer, and it follows the tone rules less strictly (e.g. an emoji in a complaint in run 2).
+  Mitigations if needed: shorter tool descriptions (fewer tokens per call), or the README
+  notes that a paid tier removes the TPM ceiling.
+- **API scalability (owner decision, 2026-11-02) — apply in step 17.** The API must be **async
+  end to end** (async agent calls via `ainvoke`/`astream`, async checkpointer
+  `AsyncSqliteSaver`, async DB access) and keep **no state in process memory**: sessions,
+  identity-failure counters, per-session message limit and the daily cap live in the database,
+  so several replicas behind a load balancer (with Postgres) work later without rewriting code.
+  The in-memory `identity.FailedLookups` stays only for tests/CLI.
+- **SQLite concurrency (owner decision, 2026-11-02) — apply in step 17.** Enable
+  `PRAGMA journal_mode=WAL` and a `busy_timeout` (e.g. 5 s) on every SQLite connection
+  (`store.db` via the engine's connect event, and `checkpoints.db`), so readers don't block
+  writers with several users at once.
 - **Convention** — The "Commit" column holds the commit subject; hashes are in `git log`
   (a commit cannot contain its own hash).
 
@@ -504,7 +600,6 @@ receive the thread id and that only `content` (never reasoning) is emitted.
 
 - 8K TPM per model may still be tight for multi-tool turns without cache hits — measure in
   step 12 with the owner's key; recalibrate `DAILY_MESSAGE_CAP`.
-- The persona prompt path in `client.yaml` points to a file created in step 12.
 - **E1 (new data finding, not in AGENTS.md §5.3):** product 130 is `coming_soon`, but appears in
   order 3 (delivered, 2 units) and order 14 (pending). Handling: status wins for new sales
   (D1); past orders are reported as they are. Detected by the profiler; add to README (step 23).
@@ -523,9 +618,6 @@ receive the thread id and that only `content` (never reasoning) is emitted.
   resets on restart (step 17 persists it in `sessions`) and a new session starts a new counter. It limits guessing inside one
   conversation; real protection needs authenticated customers or a per-IP/global limit
   (step 17's per-session and daily caps help). List it in README.
-- **Step 17 (to decide with the owner):** `DELETE /api/sessions/{id}` (LGPD) — handoffs keep
-  the session id and an optional contact. Delete them too, or anonymize (drop contact/summary,
-  keep protocol for the team)? Ask before implementing.
 
 ## Log
 
@@ -686,3 +778,24 @@ receive the thread id and that only `content` (never reasoning) is emitted.
 - Tests: ruff ok, format ok, `pytest -m "not llm"` 197 passed (Sunday, Saturday 12:59/13:00/
   13:01, Finados 2026-11-02, Good Friday, MS state holiday, municipal `extra`, protocol format
   and daily sequence).
+
+### 2026-11-02 03:00 — Step 12: Persona prompt + agent with memory
+- Done: pushed step 11 + recorded the session-deletion decision (owner). Agent core
+  (`core/agent.py`), client wiring (`client/assistant.py`), persona prompt
+  (`client/prompts/system.md`), tool tweaks from the measurement runs.
+- Files: `pyproject.toml`, `uv.lock`, `src/emporio_agent/core/agent.py`,
+  `src/emporio_agent/client/{assistant,tools}.py`, `src/emporio_agent/client/prompts/system.md`,
+  `tests/test_agent.py`, `tests/test_payments.py`, `PROGRESS.md`.
+- Deps: langchain 1.4.7, langchain-groq 1.1.3, langgraph-checkpoint-sqlite 3.1.3 (+ langgraph).
+- Tests: ruff ok, format ok, `pytest -m "not llm"` 219 passed (fake chat model: session id in
+  tools, memory per session, reasoning never emitted, context appended, 429 fallback, short
+  retry-after waits and retries once, long retry-after falls back, non-429 propagates, all-429
+  friendly message, trimming, prompt contacts and partner rule, model chain params).
+- Measurement: 4 runs × 9 turns on Groq (throwaway script in the scratchpad, not committed);
+  runs 3/4 ≈ 3,370 / 3,830 counted tokens/turn (see Verified facts). The owner reviewed the
+  prompt and asked for the adjustments listed in Decisions before the commit.
+- Quality notes from run 4 (to address later, not blocking): the 20b (fallback) said "3 dias a
+  partir da compra" for order 7 (3 = days elapsed since receipt; deadline 24/02 was right) →
+  candidate fix: return `days_left` instead of/besides `days_elapsed`; the 120b put an emoji
+  in the complaint answer (rule says none) → step 15 eval case; retry-after of 11–13 s just
+  missed the 10 s wait threshold → maybe raise to ~15 s (owner's call).

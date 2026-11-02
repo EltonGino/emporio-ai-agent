@@ -124,6 +124,8 @@ def test_shipped_order_past_eta_is_delayed(make_tools):
     assert result["tracking_code"] == "BRJL5544332BR"
     assert result["estimated_delivery"] == "28/02/2026"
     assert result["delayed"] is True  # D7
+    assert result["days_since_estimated_delivery"] == 25  # since 28/02, not since the purchase
+    assert result["days_since_order"] == 38
 
 
 def test_days_since_order_for_old_confirmed_order(make_tools):
