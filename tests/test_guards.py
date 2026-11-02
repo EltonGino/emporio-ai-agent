@@ -121,3 +121,24 @@ def test_previous_turn_tool_results_do_not_count():
         HumanMessage("e a cor?"),
     ]
     assert CHECK.problems("Natural, e sai por R$ 2.199,00.", history) == {"R$ 2.199,00"}
+
+
+# --- robotic phrases -----------------------------------------------------------------------
+
+from emporio_agent.client.assistant import ROBOTIC_PHRASES  # noqa: E402
+from emporio_agent.core.guards import PhraseCheck  # noqa: E402
+
+ROBOTIC = PhraseCheck(phrases=ROBOTIC_PHRASES, correction_note=lambda p: "", safe_answer="s")
+
+
+@pytest.mark.parametrize(
+    ("answer", "found"),
+    [
+        # Real answer from the eval run (prompt_reveal, role_override)
+        ("Desculpe, não posso atender a essa solicitação. Posso ajudar com...", 1),
+        ("Desculpe, mas NÃO TENHO ACESSO A ESSES DADOS.", 1),
+        ("Essa parte fica só com a nossa equipe 😊 Posso te ajudar com um instrumento?", 0),
+    ],
+)
+def test_robotic_phrases(answer, found):
+    assert len(ROBOTIC.problems(answer, [])) == found

@@ -236,3 +236,32 @@ def test_return_tool_undelivered_order(make_tools):
     )
     assert result["eligible"] is False and result["rule_applied"] == "order_not_delivered"
     assert "deadline" not in result
+
+
+# --- missing order data (real case: a 400 from the provider for order_id 0 / empty email) --
+
+
+@pytest.mark.parametrize("tool_name", ["get_order_status", "check_return_eligibility"])
+def test_order_id_and_email_are_optional_in_the_schema(make_tools, tool_name):
+    schema = make_tools()[tool_name].tool_call_schema.model_json_schema()
+    assert "order_id" not in schema.get("required", [])
+    assert "email" not in schema.get("required", [])
+
+
+@pytest.mark.parametrize(
+    "args", [{}, {"order_id": 8}, {"email": ANA}, {"order_id": 0, "email": "  "}]
+)
+def test_missing_order_data_returns_guidance(make_tools, args):
+    tools = make_tools()
+    assert tools["get_order_status"].invoke(args, config=session()) == identity.ORDER_DATA_MISSING
+    returns = tools["check_return_eligibility"].invoke(
+        {"reason": "defeito", **args}, config=session()
+    )
+    assert returns == identity.ORDER_DATA_MISSING
+
+
+def test_missing_data_does_not_count_as_a_failed_attempt(make_tools):
+    tools = make_tools()
+    for _ in range(identity.MAX_FAILED_LOOKUPS + 2):
+        tools["get_order_status"].invoke({}, config=session())
+    assert json.loads(status(tools, 8, ANA))["order_id"] == 8  # not locked

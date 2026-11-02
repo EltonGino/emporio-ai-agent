@@ -24,6 +24,10 @@ TOO_MANY_ATTEMPTS = (
     'for security. Offer human support (handoff_to_human)."}'
 )
 NO_SESSION = '{"error":"session_required"}'
+ORDER_DATA_MISSING = (
+    '{"error":"order_data_missing","message":"Ask the customer for the order number and the '
+    'purchase email first. For a general rule question, use search_policies instead."}'
+)
 ORDER_NOT_VERIFIED = (
     '{"error":"order_not_verified","message":"This case is about an order: first ask the '
     "customer for the order number and purchase email and look it up (get_order_status), then "

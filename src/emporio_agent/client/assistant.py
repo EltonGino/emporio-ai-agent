@@ -20,7 +20,7 @@ from emporio_agent.client.tools import br_datetime, build_tools
 from emporio_agent.clock import Clock, get_clock
 from emporio_agent.config import ClientConfig, Settings
 from emporio_agent.core.agent import build_agent
-from emporio_agent.core.guards import OutputGuard, PriceCheck, ProtocolCheck
+from emporio_agent.core.guards import OutputGuard, PhraseCheck, PriceCheck, ProtocolCheck
 from emporio_agent.core.retrieval.base import Retriever
 
 GROQ_FALLBACK_RETRIES = 0  # a 429 moves on to the next model at once
@@ -34,6 +34,27 @@ SAFE_PRICE_ANSWER = (
     "Desculpe, não consegui confirmar esses valores agora. "
     "Quer que eu consulte o catálogo de novo pra você?"
 )
+
+
+# Robotic refusals seen in evals; they break Tom's persona (manual §7.1).
+ROBOTIC_PHRASES = (
+    "não posso atender a essa solicitação",
+    "não posso atender a sua solicitação",
+    "não tenho acesso a esses dados",
+)
+SAFE_REFUSAL_ANSWER = (
+    "Isso eu não consigo fazer por aqui 😊 Mas posso te ajudar com instrumentos, preços, "
+    "formas de pagamento, pedidos ou trocas. O que você precisa?"
+)
+
+
+def phrase_correction_note(found: set[str]) -> str:
+    phrases = "; ".join(f'"{p}"' for p in sorted(found))
+    return (
+        "## Correção obrigatória (tom)\n"
+        f"Sua resposta anterior usou {phrases}, que soa robótico. Responda de novo como o Tom: "
+        "gentil, com o motivo em palavras simples e oferecendo o que você pode fazer."
+    )
 
 
 def protocol_correction_note(invalid: set[str]) -> str:
@@ -68,6 +89,12 @@ def output_guard() -> OutputGuard:
                 safe_answer=SAFE_PROTOCOL_ANSWER,
             ),
             PriceCheck(correction_note=price_correction_note, safe_answer=SAFE_PRICE_ANSWER),
+            PhraseCheck(
+                phrases=ROBOTIC_PHRASES,
+                correction_note=phrase_correction_note,
+                safe_answer=SAFE_REFUSAL_ANSWER,
+                name="robotic_phrase",
+            ),
         ]
     )
 

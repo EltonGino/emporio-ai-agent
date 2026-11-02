@@ -9,6 +9,7 @@ emitted (see PROGRESS.md: streaming).
   (models invented "Protocolo: 20231102-8745" without opening a case).
 - PriceCheck: every money amount must appear in this turn's tool results or in what the
   customer wrote (a model invented basses "por R$ 2.399,00" after an empty search).
+- PhraseCheck: forbidden phrases (e.g. robotic refusals that break the persona).
 """
 
 from __future__ import annotations
@@ -163,6 +164,26 @@ class PriceCheck:
             if isinstance(message, HumanMessage):
                 allowed |= amounts_in(message.text)
         return {text for amount, text in cited_amounts(answer).items() if amount not in allowed}
+
+    def correction(self, problems: set[str]) -> str:
+        return self.correction_note(problems)
+
+
+# --- forbidden phrases ---------------------------------------------------------------------
+
+
+@dataclass
+class PhraseCheck:
+    """The answer must not contain any of these phrases (accent/case-insensitive)."""
+
+    phrases: Sequence[str]
+    correction_note: Callable[[set[str]], str]
+    safe_answer: str
+    name: str = "phrase"
+
+    def problems(self, answer: str, history: Sequence[AnyMessage]) -> set[str]:
+        text = " ".join(unidecode(answer).casefold().split())
+        return {p for p in self.phrases if " ".join(unidecode(p).casefold().split()) in text}
 
     def correction(self, problems: set[str]) -> str:
         return self.correction_note(problems)

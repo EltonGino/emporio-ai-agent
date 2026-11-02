@@ -126,8 +126,10 @@ class PaymentArgs(BaseModel):
 
 
 class OrderLookupArgs(BaseModel):
-    order_id: int = Field(ge=1)
-    email: str = Field(max_length=254, description="Purchase email")
+    # Optional on purpose: a call without them gets guidance instead of an HTTP 400 from the
+    # provider's schema validation (seen live: order_id 0 / empty email before asking).
+    order_id: int = Field(0, ge=0, description="Order number the customer gave")
+    email: str = Field("", max_length=254, description="Purchase email the customer gave")
 
 
 class ReturnArgs(OrderLookupArgs):
@@ -214,6 +216,8 @@ def build_tools(
 
     def identified_order(order_id: int, email: str, config: RunnableConfig) -> OrderInfo | str:
         """The order, or the error JSON to return. Same error for unknown order / wrong email."""
+        if not order_id or not email.strip():
+            return identity.ORDER_DATA_MISSING  # not a failed attempt: nothing was checked
         session = identity.session_id(config)
         if session is None:
             return identity.NO_SESSION
@@ -367,7 +371,7 @@ def build_tools(
         return to_json(result)
 
     @tool(args_schema=OrderLookupArgs)
-    def get_order_status(order_id: int, email: str, config: RunnableConfig) -> str:
+    def get_order_status(config: RunnableConfig, order_id: int = 0, email: str = "") -> str:
         """The customer's own order. Call only with the order number and purchase email the
         customer gave.
         estimated_delivery is a forecast; days_since_order counts from the purchase. delayed
@@ -401,7 +405,7 @@ def build_tools(
 
     @tool(args_schema=ReturnArgs, response_format="content_and_artifact")
     def check_return_eligibility(
-        order_id: int, email: str, reason: ReturnReason, config: RunnableConfig
+        reason: ReturnReason, config: RunnableConfig, order_id: int = 0, email: str = ""
     ) -> tuple[str, dict[str, Any]]:
         """Can a delivered order be returned/exchanged today, and until when (deadline,
         days_left). reason: arrependimento | defeito | preferencia (other color/model). Needs
