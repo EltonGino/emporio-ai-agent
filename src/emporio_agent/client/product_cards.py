@@ -16,10 +16,35 @@ def normalized(text: str) -> str:
     return " ".join(re.findall(r"[a-z0-9]+", text))
 
 
+MIN_PREFIX_WORDS = 2  # brand + at least one more word: "Yamaha" alone names no product
+CODE = re.compile(r"\b(?=[a-z0-9]*[a-z])(?=[a-z0-9]*\d)[a-z0-9]{3,}\b")  # "gd20", "sgd195e"
+
+
+def name_patterns(name: str, others: list[str]) -> list[str]:
+    """What identifies a product in the answer: its full name, its alphanumeric model codes,
+    and the shortest leading part of its name (2+ words) no other candidate shares. Owner's
+    test: "Tagima Dallas Tuner" (catalog: "Tagima Dallas Tuner Aço Natural") got no card."""
+    words = name.split()
+    patterns = [name, *CODE.findall(name)]
+    for k in range(MIN_PREFIX_WORDS, len(words)):
+        prefix = " ".join(words[:k])
+        if not any(f"{o} ".startswith(f"{prefix} ") for o in others):
+            patterns.append(prefix)
+            break
+    return patterns
+
+
+def mention(text: str, patterns: list[str]) -> int | None:
+    """Where the first pattern occurs in the normalized text (as whole words), or None."""
+    found = [i for p in patterns if (i := text.find(f" {p} ")) >= 0]
+    return min(found) if found else None
+
+
 def product_cards(answer: str, results: list[ToolMessage]) -> list[dict[str, Any]]:
-    """Full name or distinctive alphanumeric model code must occur in the validated answer.
+    """A card for each product of this turn's catalog results that the validated answer
+    mentions (full name, model code or unique leading words), in order of mention.
     No database lookups, inferred prices, descriptions, specs or inventory counts leave here.
-    Conservative matching intentionally omits cards for ambiguous brand-only mentions.
+    Brand-only or ambiguous wording ("o Yamaha", "a bateria acústica") gets no card.
     """
     candidates = {}
     for result in results:
@@ -45,10 +70,11 @@ def product_cards(answer: str, results: list[ToolMessage]) -> list[dict[str, Any
                 candidates[product["id"]] = product
     cards = []
     text = f" {normalized(answer)} "
-    for product in candidates.values():
-        name = normalized(product["name"])
-        codes = re.findall(r"\b(?=[a-z0-9]*[a-z])(?=[a-z0-9]*\d)[a-z0-9]{3,}\b", name)
-        if f" {name} " not in text and not any(f" {code} " in text for code in codes):
+    names = {product_id: normalized(p["name"]) for product_id, p in candidates.items()}
+    for product_id, product in candidates.items():
+        others = [n for other, n in names.items() if other != product_id]
+        position = mention(text, name_patterns(names[product_id], others))
+        if position is None:
             continue
         card = {key: value for key, value in product.items() if key in PUBLIC_FIELDS}
         promo = product.get("promo")
@@ -58,5 +84,5 @@ def product_cards(answer: str, results: list[ToolMessage]) -> list[dict[str, Any
             pix = product.get("pix_price_text") or product.get("payment", {}).get("pix_price_text")
             if pix:
                 card["pix_price_text"] = pix
-        cards.append(card)
-    return cards
+        cards.append((position, card))
+    return [card for _, card in sorted(cards, key=lambda pc: pc[0])]

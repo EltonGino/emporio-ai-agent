@@ -1730,4 +1730,18 @@ one customer per conversation). One local commit per fix, no push. Steps 22/23 r
   model searched `query "drums"` (the catalog-language gap of fix 1), not a guard problem.
   The first answer of the owner's case can't be reproduced on demand: with fix 1's hint the
   model now calls `search_products` for "And about drums?" by itself.
+- **3. Product cards.** Investigated with the owner's trace (`b1195975…`): **no card limit**
+  exists (API projector and frontend render every card). The answer said "Tagima Dallas
+  Tuner"; the catalog name is "Tagima Dallas Tuner Aço Natural" and has no digit-bearing model
+  code, so neither rule (full name, model code) matched. Hyphens were not the cause:
+  `normalized` already maps U+2011/en dashes and narrow spaces (tested). The GF-3D card was
+  correct (the answer mentions it). Fix (`client/product_cards.py`): a product also matches by
+  the **shortest leading part of its name (≥ 2 words) that no other candidate of the turn
+  shares** ("Tagima Dallas"; drum kits need "Bateria Acústica Pearl"/"… Yamaha Kit 3"); brand
+  only and shared prefixes still get no card. Cards now follow the **order of mention**.
+  Tests (`tests/test_product_cards.py`, real `search_products` output + the owner's verbatim
+  answer): the owner's case failed on the old matcher (Tagima missing) and passes now.
+  Live (Ollama 20b, real agent + `astream_turn` projector, "Tem o Giannini GF-3D?", 3 runs):
+  every product cited got a card, in order (4–5 cards per run). Seen, not addressed: one run
+  answered with a Markdown table despite the prompt's "sem tabelas".
 
