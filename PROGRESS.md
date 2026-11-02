@@ -13,12 +13,15 @@ Update this file in the same commit as every plan step (see AGENTS.md §0 and §
 
 ## Next step
 
-Step 14 — `feat(cli): interactive CLI with debug mode` (AGENTS.md §10):
-`uv run emporio-chat [--session ID] [--debug] [--now ISO]` (typer + rich; add the console
-script in pyproject). Consume `core.events.stream_turn` through `core.tracing.traced` with a
-`JsonlTracer(TRACES_DIR)`; `--debug` prints tool_start/tool_end/retrieval/notice events dimmed
-(and the turn's usage from `final`); `/new` starts a new session id, `/exit` quits. Persistent
-memory via `core.agent.sqlite_checkpointer(settings.checkpoint_db)`; `--now` → `get_clock(now)`.
+Step 15 — `test: routing and adversarial evals` (AGENTS.md §14; Decisions "Groq free-tier
+budget" item 7, "Official contacts" item 2, "Catalog search signals" item 2, the step 12
+quality notes and the routing gap under Known issues). `evals/routing_cases.yaml` (~10+
+prompts → expected / forbidden tools, plus answer checks) and
+`evals/adversarial_cases.yaml` (5–8: prompt reveal, role override, other customer's email,
+wrong-email order lookup, injected instruction, contacts P1/P2). `@pytest.mark.llm`, skipped
+without `GROQ_API_KEY`; pytest option `--llm-model` (e.g. `openai/gpt-oss-20b`) to spare the
+120b quota. Run them through `run_turn`/`stream_turn` with a fresh session per case and a
+temporary DB; pace calls to respect 8K TPM.
 
 ## Plan status
 
@@ -36,8 +39,8 @@ memory via `core.agent.sqlite_checkpointer(settings.checkpoint_db)`; `--now` →
 | 10 | Order status + return eligibility | done | `feat(tools): order status and return eligibility with identity check` (4d14084); `feat(tools): days since order in order status` (ca153a7) |
 | 11 | Store status, policy search, handoff | done | `feat(tools): store status, policy search and human handoff` (0ebaac7) |
 | 12 | Persona prompt + agent with memory | done | `feat(agent): persona prompt and tool-calling agent with memory` (1dd00d7); `fix(agent): return days left, 429 wait, invalid tool calls and prompt rules` (1a2986e); `feat(agent): protocol guard and idempotent handoff` (f2f29e9) |
-| 13 | Event stream + JSONL tracing | done | `feat(core): event stream and JSONL tracing` |
-| 14 | CLI with debug mode | pending | |
+| 13 | Event stream + JSONL tracing | done | `feat(core): event stream and JSONL tracing` (f2d2ac8) |
+| 14 | CLI with debug mode | done | `feat(cli): interactive CLI with debug mode` |
 | 15 | Routing + adversarial evals | pending | |
 | 16 | CI workflow | pending | |
 | 17 | FastAPI (SSE, sessions, rate limit, retention, deletion) | pending | |
@@ -663,6 +666,22 @@ memory via `core.agent.sqlite_checkpointer(settings.checkpoint_db)`; `--now` →
   yields. LangSmith stays env-only (no code). `TRACES_DIR` added to `config.py`.
 - **Step 13** — Test doubles moved to `tests/fakes.py` (`ScriptedModel`, `ProviderError`,
   `call`), shared by `test_agent.py` and `test_events.py`.
+- **Step 14** — `src/emporio_agent/cli.py` (typer + rich), console script `emporio-chat`
+  (`[project.scripts]`). Options: `--session ID` (validated like trace ids), `--debug`,
+  `--now ISO` (overrides `AGENT_NOW`; naive = store time). Startup: settings + client config,
+  friendly exit if `GROQ_API_KEY` is missing (provider groq), hybrid retriever (status
+  spinner; first run downloads the embedding model), persistent memory
+  (`sqlite_checkpointer(CHECKPOINT_DB)`), `JsonlTracer(TRACES_DIR)`. Banner shows the store,
+  the simulated date when the clock is fixed, the session id and the commands.
+- **Step 14** — Each turn consumes `traced(stream_turn(...))` under a "Tom está digitando…"
+  spinner; the validated final text is rendered as Markdown (token events are not needed in a
+  terminal). `--debug` prints, dimmed and without rich markup parsing: `→ tool(args)`,
+  `← tool [ms] preview`, `§ section (score, bm25+dense)`, `! notice`, and after the answer the
+  turn's usage (input/cached/output/reasoning tokens, model calls, models, ms). Errors show
+  the friendly message; the detail only with `--debug`. `/new` → new uuid session (fresh
+  memory), `/exit` or Ctrl-D/Ctrl-C → quit.
+- **Step 14** — `build_chat_agent` is the single seam for tests: `tests/test_cli.py` swaps it
+  for a scripted model (no LLM, no embeddings) and points `TRACES_DIR` to a temp dir.
 - **Convention** — The "Commit" column holds the commit subject; hashes are in `git log`
   (a commit cannot contain its own hash).
 
@@ -693,10 +712,13 @@ memory via `core.agent.sqlite_checkpointer(settings.checkpoint_db)`; `--now` →
 - **Routing gap seen in the step 13 live trace (→ step 15 eval case):** "Posso trocar um
   produto com defeito? Qual o prazo?" (a general policy question) made the 120b try an order
   tool with empty data (two `tool_use_failed` 400s, recovered) and the 20b then asked for
-  order number + email instead of calling `search_policies`. Expected: answer the 30-day
-  defect rule from the manual and only then offer to check a specific order. Add to
-  `evals/routing_cases.yaml`; if it fails there, add a prompt line ("dúvida geral de política
-  → search_policies, sem pedir dados do pedido").
+  order number + email instead of calling `search_policies`. **Expected behaviour (owner,
+  2026-11-02):** answer the general rule via `search_policies` (defect exchange within 30
+  days of purchase), **then offer** to check a specific order — without requiring the order
+  data first. Step 15 eval case: expected tool `search_policies`, forbidden first-call tools
+  `get_order_status`/`check_return_eligibility`, answer mentions 30 dias. If it fails, add a
+  prompt line ("dúvida geral de política → search_policies; só depois ofereça verificar um
+  pedido").
 - **README known limitation (owner, step 9):** installments are `total / n` rounded to cents,
   so n × installment can differ from the total by a few cents (e.g. 7 × R$ 314,14 =
   R$ 2.198,98 for R$ 2.199,00); a real checkout adjusts one installment. List it in README
@@ -923,3 +945,16 @@ memory via `core.agent.sqlite_checkpointer(settings.checkpoint_db)`; `--now` →
 - Live smoke (Groq, 2 turns, traced): JSONL shows user_message, tool_start/end,
   invalid_tool_call and rate_limit notices (waits of 11 s and 4 s), artifact notice and final
   with usage (7,647 input / 2,304 cached on the 3-call turn).
+
+### 2026-11-02 06:40 — Step 14: CLI with debug mode
+- Done: pushed step 13 (owner approval); recorded the expected behaviour for the step 15
+  "defeito" routing case. `cli.py` + `emporio-chat` script.
+- Files: `src/emporio_agent/cli.py`, `pyproject.toml`, `uv.lock`, `tests/test_cli.py`,
+  `PROGRESS.md`.
+- Deps: typer 0.27.3, rich 15.0.0.
+- Tests: ruff ok, format ok, `pytest -m "not llm"` 264 passed (answer + trace, debug lines,
+  tools hidden without debug, /new, --now, invalid options, missing key, error event).
+- Live smoke (Groq, `--debug`, temp DB/memory): GD20 PIX question → search_products +
+  calculate_payment_options, "R$ 2.089,05 no PIX … até 12x sem juros de R$ 183,25", 7,450
+  input tokens (2,560 cached), 3 calls on the 120b, 1.8 s; "Vocês vendem cordas?" → only
+  instruments, asks if the customer wants an instrument, no tool call.
