@@ -26,12 +26,12 @@ def repo(tmp_path_factory):
 
 
 @pytest.fixture
-def make_tools(repo):
+def make_tools(repo, policy_retriever):
     """Fresh tools (and a fresh lockout counter) at a simulated store time."""
 
     def make(now: str = "2026-03-25T10:30"):
         clock = FixedClock(datetime.fromisoformat(now).replace(tzinfo=CLIENT.store.tz))
-        return {t.name: t for t in build_tools(repo, CLIENT, clock)}
+        return {t.name: t for t in build_tools(repo, CLIENT, clock, policy_retriever)}
 
     return make
 

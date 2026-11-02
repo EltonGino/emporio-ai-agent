@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -104,6 +104,26 @@ class Promotion(Base):
     is_active: Mapped[bool]  # promotions have no dates; this flag is the truth (D3)
 
     product: Mapped[Product] = relationship(back_populates="promotions")
+
+
+HANDOFF_REASONS = ("complaint", "delayed_order", "manager_question", "unavailable_item", "other")
+
+
+class Handoff(Base):
+    """Runtime table: requests passed to the human team. No foreign keys to store tables, so
+    rebuilding the catalog never touches it."""
+
+    __tablename__ = "handoffs"
+    __table_args__ = (_one_of("reason", HANDOFF_REASONS),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    protocol: Mapped[str] = mapped_column(String(20), unique=True)  # EMP-YYYYMMDD-NNNN
+    created_at: Mapped[datetime]  # store time (naive)
+    session_id: Mapped[str | None] = mapped_column(index=True)
+    reason: Mapped[str] = mapped_column(String(20))
+    summary: Mapped[str]
+    contact: Mapped[str | None]  # only if the customer offered it
+    status: Mapped[str] = mapped_column(String(20), default="open")
 
 
 # Rebuilt from data/raw by the loader. Runtime tables (handoffs, sessions) are kept.

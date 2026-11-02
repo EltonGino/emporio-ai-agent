@@ -22,11 +22,14 @@ BANDS = PAYMENTS.installment_bands
 
 
 @pytest.fixture(scope="module")
-def tools(tmp_path_factory):
+def tools(tmp_path_factory, policy_retriever):
     engine = make_engine(f"sqlite:///{tmp_path_factory.mktemp('db')}/store.db")
     load_store_data(engine)
     return {
-        t.name: t for t in build_tools(SqlStoreRepository(engine), get_client_config(), get_clock())
+        t.name: t
+        for t in build_tools(
+            SqlStoreRepository(engine), get_client_config(), get_clock(), policy_retriever
+        )
     }
 
 

@@ -9,16 +9,24 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Protocol
 
-from sqlalchemy import Engine, select
+from sqlalchemy import Engine, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from emporio_agent.client import matching
 from emporio_agent.client.db.loader import normalize_email
-from emporio_agent.client.db.models import Category, Order, OrderItem, Product, Promotion
+from emporio_agent.client.db.models import (
+    Category,
+    Handoff,
+    Order,
+    OrderItem,
+    Product,
+    Promotion,
+)
 from emporio_agent.client.rules import apply_discount, availability
 
 # Extra search words derived from specs, so "violão de aço" or "eletroacústico" match.
@@ -27,6 +35,8 @@ SPEC_SEARCH_TERMS = {
     ("electronics", "yes"): "elétrico eletroacústico",
 }
 MAX_UNAVAILABLE_MATCHES = 3
+PROTOCOL_PREFIX = "EMP"
+PROTOCOL_ATTEMPTS = 3  # retries if two handoffs race for the same daily number
 
 
 @dataclass(frozen=True)
@@ -122,6 +132,17 @@ class StoreRepository(Protocol):
 
     def get_order_for_customer(self, order_id: int, email: str) -> OrderInfo | None:
         """None when the order doesn't exist or the email isn't its customer's (same answer)."""
+        ...
+
+    def create_handoff(
+        self,
+        reason: str,
+        summary: str,
+        contact: str | None,
+        session_id: str | None,
+        created_at: datetime,
+    ) -> str:
+        """Register a request for the human team; returns its protocol EMP-YYYYMMDD-NNNN."""
         ...
 
 
@@ -285,3 +306,34 @@ class SqlStoreRepository:
                     for i in sorted(order.items, key=lambda i: i.id)
                 ],
             )
+
+    def create_handoff(
+        self,
+        reason: str,
+        summary: str,
+        contact: str | None,
+        session_id: str | None,
+        created_at: datetime,
+    ) -> str:
+        prefix = f"{PROTOCOL_PREFIX}-{created_at:%Y%m%d}-"
+        for _ in range(PROTOCOL_ATTEMPTS):
+            try:
+                with Session(self._engine) as session, session.begin():
+                    today = session.scalar(
+                        select(func.count()).where(Handoff.protocol.startswith(prefix))
+                    )
+                    protocol = f"{prefix}{today + 1:04d}"
+                    session.add(
+                        Handoff(
+                            protocol=protocol,
+                            created_at=created_at.replace(tzinfo=None),
+                            session_id=session_id,
+                            reason=reason,
+                            summary=summary,
+                            contact=contact,
+                        )
+                    )
+                return protocol
+            except IntegrityError:
+                continue  # another handoff took this number: count again
+        raise RuntimeError("could not allocate a handoff protocol")

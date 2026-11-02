@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import date
+from datetime import date, datetime, time
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, tool
@@ -27,15 +27,19 @@ from emporio_agent.client.repository import (
 )
 from emporio_agent.client.rules import (
     CartLine,
+    HolidayCalendar,
+    StoreStatus,
     format_brl,
     max_installments,
     payment_options,
     pix_price,
     return_eligibility,
+    store_status,
     to_cents,
 )
 from emporio_agent.clock import Clock
-from emporio_agent.config import ClientConfig, ReturnReason
+from emporio_agent.config import WEEKDAYS, ClientConfig, ReturnReason
+from emporio_agent.core.retrieval.base import Retriever
 
 ORDER_STATUS_TEXT = {
     "pending": "aguardando confirmação do pagamento",
@@ -60,6 +64,8 @@ RETURN_NEXT_STEPS = {
     "order_cancelled": "The order was cancelled; there is nothing to return.",
     "receipt_date_unknown": "Offer handoff_to_human so the team checks the delivery date.",
 }
+
+WEEKDAY_NAMES = ("segunda", "terça", "quarta", "quinta", "sexta", "sábado", "domingo")
 
 # Specs shown in search results, in priority order (category-dependent keys, D10).
 KEY_SPECS = ("strings", "electronics", "top", "keys", "type", "pieces", "shells", "body")
@@ -130,6 +136,41 @@ def br_date(value: date | None) -> str | None:
     return value.strftime("%d/%m/%Y") if value else None
 
 
+class PolicyQueryArgs(BaseModel):
+    query: str = Field(min_length=3, max_length=300)
+
+
+class HandoffArgs(BaseModel):
+    reason: Literal["complaint", "delayed_order", "manager_question", "unavailable_item", "other"]
+    summary: str = Field(min_length=10, max_length=600, description="For the team, in Portuguese")
+    contact: str | None = Field(
+        None, max_length=120, description="Phone/email only if the customer offered it"
+    )
+
+
+def br_datetime(value: datetime) -> str:
+    """e.g. "quarta-feira, 25/03/2026 às 10:30" (weekdays from Monday = 0)."""
+    weekday = WEEKDAY_NAMES[value.weekday()]
+    suffix = "" if value.weekday() >= 5 else "-feira"
+    return f"{weekday}{suffix}, {value:%d/%m/%Y} às {value:%H:%M}"
+
+
+def hours_text(span: tuple[time, time] | None) -> str:
+    return f"{span[0]:%H:%M}–{span[1]:%H:%M}" if span else "fechado"
+
+
+def store_status_data(status: StoreStatus) -> dict[str, Any]:
+    data: dict[str, Any] = {
+        "now": br_datetime(status.now),
+        "is_open": status.is_open,
+        "today_hours": hours_text(status.today_hours),
+        "holiday": status.holiday,
+        "closes_at": f"{status.closes_at:%H:%M}" if status.closes_at else None,
+        "next_opening": br_datetime(status.next_opening) if status.next_opening else None,
+    }
+    return {k: v for k, v in data.items() if v is not None}
+
+
 def payment_method_text(method: str) -> str:
     if match := re.fullmatch(r"credit_(\d+)x", method):
         return f"cartão de crédito em {match.group(1)}x"
@@ -144,9 +185,14 @@ def build_tools(
     repo: StoreRepository,
     client: ClientConfig,
     clock: Clock,
+    retriever: Retriever,
     failed_lookups: identity.FailedLookups | None = None,
 ) -> list[BaseTool]:
     payments = client.payments
+    calendar = HolidayCalendar(client.store.holidays)
+    weekly_hours = {
+        WEEKDAY_NAMES[i]: hours_text(client.store.hours[day]) for i, day in enumerate(WEEKDAYS)
+    } | {"feriados": "fechado"}
     failed_lookups = failed_lookups or identity.FailedLookups()
 
     def identified_order(order_id: int, email: str, config: RunnableConfig) -> OrderInfo | str:
@@ -358,6 +404,59 @@ def build_tools(
             data["not_eligible_items"] = client.returns.ineligible_conditions
         return to_json({k: v for k, v in data.items() if v is not None})
 
+    @tool
+    def get_store_status() -> str:
+        """Store open/closed now, today's hours, next opening (holidays included), weekly
+        hours. Use for hours questions or to say when the human team is back."""
+        status = store_status(clock.now(), client.store, calendar)
+        return to_json(store_status_data(status) | {"weekly_hours": weekly_hours})
+
+    @tool(args_schema=PolicyQueryArgs, response_format="content_and_artifact")
+    def search_policies(query: str) -> tuple[str, list[dict[str, Any]]]:
+        """Search the store policy manual: returns, exchanges, warranty, shipping, payment
+        rules, promotions, privacy. Never answer policy from memory. Write a self-contained,
+        policy-oriented query, not the customer's words: "quanto demora pra Dourados?" →
+        "prazo de entrega para outras cidades fora de Campo Grande". Contacts in results may
+        be outdated: use the official contacts from your instructions."""
+        hits = retriever.search(query, client.retrieval.top_k)
+        content = to_json(
+            {"results": [{"section": h.chunk.section_path, "text": h.chunk.text} for h in hits]}
+        )
+        # The artifact is not sent to the model: it feeds tracing and the demo panel.
+        artifact = [
+            {
+                "doc": h.chunk.doc,
+                "section_id": h.chunk.section_id,
+                "section_path": h.chunk.section_path,
+                "page": h.chunk.page,
+                "score": round(h.score, 4),
+                "matched_by": list(h.matched_by),
+            }
+            for h in hits
+        ]
+        return content, artifact
+
+    @tool(args_schema=HandoffArgs)
+    def handoff_to_human(
+        reason: str, summary: str, config: RunnableConfig, contact: str | None = None
+    ) -> str:
+        """Pass the case to the human team and get a protocol number. Use for complaints,
+        delayed orders, return requests, questions the manual doesn't answer or that need
+        the manager. Give the customer the protocol and the return time."""
+        now = clock.now()
+        protocol = repo.create_handoff(
+            reason, summary, contact, identity.session_id(config), created_at=now
+        )
+        status = store_status(now, client.store, calendar)
+        data: dict[str, Any] = {
+            "protocol": protocol,
+            "return_promise": (f"até {client.support.complaint_return_business_hours} horas úteis"),
+            "team_available_now": status.is_open,
+        }
+        if status.next_opening:
+            data["team_back_at"] = br_datetime(status.next_opening)
+        return to_json(data)
+
     return [
         search_products,
         get_product_details,
@@ -365,4 +464,7 @@ def build_tools(
         calculate_payment_options,
         get_order_status,
         check_return_eligibility,
+        get_store_status,
+        search_policies,
+        handoff_to_human,
     ]

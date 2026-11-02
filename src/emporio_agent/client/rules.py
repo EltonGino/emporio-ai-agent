@@ -1,4 +1,4 @@
-"""Business rules as pure functions: availability, prices, payments and money formatting.
+"""Business rules as pure functions: availability, prices, payments, returns, store hours.
 
 Tools call these so the LLM never decides availability or computes/formats money itself.
 Payment rules come from `client.yaml` (manual §3, §3.1, §6.2).
@@ -8,10 +8,20 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
-from emporio_agent.config import InstallmentBand, PaymentsConfig, ReturnReason, ReturnsConfig
+import holidays
+
+from emporio_agent.config import (
+    WEEKDAYS,
+    HolidaysConfig,
+    InstallmentBand,
+    PaymentsConfig,
+    ReturnReason,
+    ReturnsConfig,
+    StoreConfig,
+)
 
 CENT = Decimal("0.01")
 
@@ -151,3 +161,62 @@ def return_eligibility(
     deadline = receipt + timedelta(days=days)
     rule = "regret_window" if reason == "arrependimento" else "preference_window"
     return ReturnDecision(today <= deadline, rule, deadline, (today - receipt).days, receipt)
+
+
+# --- store hours (manual §2) -------------------------------------------------------------------
+
+MAX_DAYS_CLOSED = 14  # a search bound for the next opening, far beyond any real closure
+
+
+class HolidayCalendar:
+    """National + state holidays (`holidays` package) plus municipal dates from client.yaml."""
+
+    def __init__(self, config: HolidaysConfig) -> None:
+        self._calendar = holidays.country_holidays(
+            config.country, subdiv=config.subdiv, language="pt_BR"
+        )
+        self._extra = set(config.extra)
+
+    def name(self, day: date) -> str | None:
+        if day in self._extra:
+            return "feriado municipal"
+        return self._calendar.get(day)
+
+
+@dataclass(frozen=True)
+class StoreStatus:
+    now: datetime
+    is_open: bool
+    today_hours: tuple[time, time] | None  # None = closed all day
+    holiday: str | None
+    closes_at: datetime | None  # when open
+    next_opening: datetime | None  # when closed
+
+
+def opening_hours(
+    day: date, store: StoreConfig, calendar: HolidayCalendar
+) -> tuple[time, time] | None:
+    """Holidays are closed days (manual §2)."""
+    if calendar.name(day):
+        return None
+    return store.hours[WEEKDAYS[day.weekday()]]
+
+
+def store_status(now: datetime, store: StoreConfig, calendar: HolidayCalendar) -> StoreStatus:
+    """`now` in store time. Closing time is exclusive: Saturday 13:00 is already closed."""
+    today = now.date()
+    hours = opening_hours(today, store, calendar)
+    holiday = calendar.name(today)
+
+    def at(day: date, moment: time) -> datetime:
+        return datetime.combine(day, moment, tzinfo=now.tzinfo)
+
+    if hours and hours[0] <= now.time() < hours[1]:
+        return StoreStatus(now, True, hours, holiday, at(today, hours[1]), None)
+    if hours and now.time() < hours[0]:
+        return StoreStatus(now, False, hours, holiday, None, at(today, hours[0]))
+    for offset in range(1, MAX_DAYS_CLOSED + 1):
+        day = today + timedelta(days=offset)
+        if span := opening_hours(day, store, calendar):
+            return StoreStatus(now, False, hours, holiday, None, at(day, span[0]))
+    return StoreStatus(now, False, hours, holiday, None, None)

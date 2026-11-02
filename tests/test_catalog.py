@@ -33,8 +33,10 @@ def repo(engine):
 
 
 @pytest.fixture(scope="module")
-def tools(repo):
-    return {t.name: t for t in build_tools(repo, get_client_config(), get_clock())}
+def tools(repo, policy_retriever):
+    return {
+        t.name: t for t in build_tools(repo, get_client_config(), get_clock(), policy_retriever)
+    }
 
 
 def call(tool, args=None):

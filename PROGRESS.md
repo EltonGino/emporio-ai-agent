@@ -13,13 +13,14 @@ Update this file in the same commit as every plan step (see AGENTS.md §0 and §
 
 ## Next step
 
-Step 11 — `feat(tools): store status, policy search and human handoff` (+ tests) (AGENTS.md §7
-`get_store_status`, `search_policies`, `handoff_to_human`; §14: store status on Sunday,
-Saturday 13:01 and holiday 2026-11-02 (Finados); handoff protocol `EMP-YYYYMMDD-NNNN`).
-`search_policies` description must ask for a self-contained, policy-oriented query (see
-"search_policies query rewriting"). Contacts come from `client.yaml` (P1/P2). `handoffs`
-runtime table (no FK to store tables). Holidays need a BR/MS holiday source — [VERIFY] the
-`holidays` package or a small inline list.
+Step 12 — `feat(agent): persona prompt and tool-calling agent with memory` (AGENTS.md §8, §9).
+Read every Decision tagged "step 12" first: Groq fallback middleware (RateLimitError only),
+reasoning effort/format, token trimming, dynamic context **appended**, official contacts in
+the static prompt, accessory signal, partial-match signal, stale orders (`days_since_order`),
+prompt ~1,200 tokens. Add langchain, langchain-groq, langgraph-checkpoint-sqlite (let uv lock
+compatible versions). Tools: `build_tools(repo, client, clock, retriever)`; session id =
+`configurable.thread_id`. Include an agent test with a fake chat model checking that the tools
+receive the thread id and that only `content` (never reasoning) is emitted.
 
 ## Plan status
 
@@ -34,8 +35,8 @@ runtime table (no FK to store tables). Holidays need a BR/MS holiday source — 
 | 7 | Retrieval golden set + eval script | done | `feat(evals): retrieval golden set and evaluation script` (fdb9a8e) |
 | 8 | Catalog and promotion tools | done | `feat(tools): catalog and promotion tools` (26bf364); signals in `feat(tools): partial-match and accessory signals in product search` |
 | 9 | Payment rules | done | `feat(tools): payment rules` (ebaa394) |
-| 10 | Order status + return eligibility | done | `feat(tools): order status and return eligibility with identity check` (4d14084); `feat(tools): days since order in order status` |
-| 11 | Store status, policy search, handoff | pending | |
+| 10 | Order status + return eligibility | done | `feat(tools): order status and return eligibility with identity check` (4d14084); `feat(tools): days since order in order status` (ca153a7) |
+| 11 | Store status, policy search, handoff | done | `feat(tools): store status, policy search and human handoff` |
 | 12 | Persona prompt + agent with memory | pending | |
 | 13 | Event stream + JSONL tracing | pending | |
 | 14 | CLI with debug mode | pending | |
@@ -164,6 +165,13 @@ runtime table (no FK to store tables). Holidays need a BR/MS holiday source — 
   with `tool.invoke(args, config=...)`. Note: an unpinned langgraph-prebuilt (newer than 1.0.8)
   failed to import with langgraph 1.1.3 (`ServerInfo`), so step 12 must let uv lock compatible
   versions (no hand pins).
+- **Holidays [VERIFY] (step 11, 2026-11-02)** — `holidays` 0.107 (MIT):
+  `holidays.country_holidays("BR", subdiv="MS", language="pt_BR")` lists, for 2026: national
+  holidays incl. **Finados 2026-11-02**, Sexta-feira Santa, Consciência Negra (11-20), and the
+  **MS state holiday "Criação do Estado" (10-11)**. Carnival is only in the `optional`
+  category (ponto facultativo), so the store opens. Campo Grande **municipal** holidays are not
+  in the package → `store.holidays.extra` (ISO dates, now validated as `date`), left empty:
+  the manual doesn't list them and we don't invent dates.
 - Manual §2 hours confirmed from the PDF: Mon–Fri 09:00–18:00, Sat 09:00–13:00, Sun and
   holidays closed.
 
@@ -463,6 +471,30 @@ runtime table (no FK to store tables). Holidays need a BR/MS holiday source — 
   the failed-lookup counter in the `sessions` table (e.g. `failed_order_lookups` column) so it
   survives restarts; `identity.FailedLookups` becomes an interface with the in-memory version
   for tests/CLI and a DB-backed one for the API.
+- **Step 11** — Store hours (`rules.store_status`, pure): holidays (package + `extra`) are
+  closed days; closing time is exclusive (Saturday 13:00 = closed); next opening is searched
+  day by day (bounded to 14 days). `get_store_status` returns now (pt-BR, e.g. "quarta-feira,
+  25/03/2026 às 10:30"), open/closed, today's hours, holiday name, closes_at / next_opening and
+  the weekly hours (+ "feriados: fechado"). Contacts are **not** in this tool: they go in the
+  static prompt (step 12, owner decision).
+- **Step 11** — `search_policies(query)`: hybrid retriever injected into `build_tools`, `top_k`
+  from client.yaml (3). The description carries the owner's query-rewriting rule (with the
+  Dourados example) and says contacts in results may be outdated (P1/P2). Uses
+  `response_format="content_and_artifact"`: the model sees only `{section, text}`; the artifact
+  (doc, section id/path, page, RRF score, matched_by) is kept out of the prompt for tracing and
+  the Bastidores panel (steps 13, 20).
+- **Step 11** — `handoff_to_human(reason, summary, contact?)`: new runtime table `handoffs`
+  (no FK to store tables; `created_at` naive store time; `session_id` from the run config, not
+  an argument). Protocol `EMP-YYYYMMDD-NNNN`, daily sequence by store date, unique constraint
+  + up to 3 retries if two requests race. Returns the protocol, "até 24 horas úteis"
+  (`support.complaint_return_business_hours`), `team_available_now` and, when closed,
+  `team_back_at` (manual §7.1: say when the team is back).
+- **Step 11** — Tests use a shared session fixture `policy_retriever` (BM25 over the real
+  manual, `tests/conftest.py`) so tool tests don't need the embedding model.
+- **Step 11** — Token budget: the 9 tool schemas ≈ **1,300 tokens** (chars/4;
+  `search_products` ≈ 340, `handoff_to_human` ≈ 200). With a ~1,200-token prompt the static
+  prefix is ≈ 2,500 tokens (cached on gpt-oss after the first call). If step 12 measurements
+  show TPM pressure, shorten the descriptions first.
 - **Convention** — The "Commit" column holds the commit subject; hashes are in `git log`
   (a commit cannot contain its own hash).
 
@@ -491,6 +523,9 @@ runtime table (no FK to store tables). Holidays need a BR/MS holiday source — 
   resets on restart (step 17 persists it in `sessions`) and a new session starts a new counter. It limits guessing inside one
   conversation; real protection needs authenticated customers or a per-IP/global limit
   (step 17's per-session and daily caps help). List it in README.
+- **Step 17 (to decide with the owner):** `DELETE /api/sessions/{id}` (LGPD) — handoffs keep
+  the session id and an optional contact. Delete them too, or anonymize (drop contact/summary,
+  keep protocol for the team)? Ask before implementing.
 
 ## Log
 
@@ -637,3 +672,17 @@ runtime table (no FK to store tables). Holidays need a BR/MS holiday source — 
   hint); recorded the step 12 prompt rule and the step 17 counter persistence.
 - Files: `src/emporio_agent/client/tools.py`, `tests/test_orders.py`, `PROGRESS.md`.
 - Tests: ruff ok, format ok, `pytest -m "not llm"` 178 passed.
+
+### 2026-11-02 01:50 — Step 11: Store status, policy search, handoff
+- Done: pushed step 10 (owner approval); `days_since_order` follow-up (ca153a7). Holiday
+  calendar + `store_status` rules; `Handoff` model and `repo.create_handoff`; tools
+  `get_store_status`, `search_policies` (content + artifact), `handoff_to_human`;
+  `build_tools` takes the retriever.
+- Files: `pyproject.toml`, `uv.lock`, `src/emporio_agent/config.py`,
+  `src/emporio_agent/client/{rules,repository,tools}.py`, `src/emporio_agent/client/db/models.py`,
+  `tests/conftest.py`, `tests/test_store_tools.py`, `tests/test_{catalog,payments,orders}.py`,
+  `PROGRESS.md`.
+- Deps: holidays 0.107.
+- Tests: ruff ok, format ok, `pytest -m "not llm"` 197 passed (Sunday, Saturday 12:59/13:00/
+  13:01, Finados 2026-11-02, Good Friday, MS state holiday, municipal `extra`, protocol format
+  and daily sequence).

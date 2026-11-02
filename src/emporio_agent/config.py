@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, time
+from datetime import date, datetime, time
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Literal
@@ -101,7 +101,7 @@ class _Strict(BaseModel):
 class HolidaysConfig(_Strict):
     country: str
     subdiv: str | None = None
-    extra: list[str] = []  # ISO dates (municipal holidays)
+    extra: list[date] = []  # municipal holidays (ISO dates in YAML)
 
 
 class StoreConfig(_Strict):
