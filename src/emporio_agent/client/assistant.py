@@ -31,6 +31,7 @@ from emporio_agent.core.guards import (
     PhraseCheck,
     PriceCheck,
     ProtocolCheck,
+    RequiredToolCheck,
     TopicToolCheck,
     issued_protocols,
 )
@@ -269,6 +270,14 @@ def output_guard() -> OutputGuard:
                 safe_answer=safe_order_date_answer,
                 name="order_date_label",
             ),
+            RequiredToolCheck(
+                message_patterns=(ORDER_NUMBER, EMAIL),
+                tools=ORDER_TOOLS,
+                correction_note=order_lookup_correction_note,
+                safe_answer=localized(ORDER_LOOKUP_ANSWERS),
+                name="order_lookup",
+                forced_tools=ORDER_TOOLS,
+            ),
         ],
         forced_tool_note=FORCED_TOOL_NOTE,
     )
@@ -320,6 +329,35 @@ ORDER_STATUS = {
         "cancelled": "cancelado",
     },
 }
+# A message with an order number and an e-mail must be looked up in the same turn (video
+# rehearsal on the 20b: "E o pedido 9, <e-mail>?" got "me passa o número e o e-mail", twice).
+EMAIL = r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+"
+# The number after pedido/order/compra ("E o pedido 9", "pedido nº 9") or right before the
+# e-mail ("9, ana@…"); not part of an amount ("R$ 1.000") — a bare number elsewhere doesn't count.
+NUMBER = r"(?<![\d.,$])\b\d{1,6}\b(?![.,]\d)"
+ORDER_NUMBER = (
+    rf"(?i)\b(?:pedido|order|compra)\b\D{{0,12}}?{NUMBER}|{NUMBER}[\s,;:/-]{{1,4}}{EMAIL}"
+)
+ORDER_TOOLS = ("get_order_status", "check_return_eligibility")
+ORDER_LOOKUP_ANSWERS = {
+    "pt": "Desculpe, não consegui consultar o pedido agora. Pode me mandar de novo o número do "
+    "pedido e o e-mail da compra?",
+    "en": "Sorry, I couldn't look up the order just now. Could you send me the order number "
+    "and the purchase e-mail again?",
+    "es": "Disculpa, no pude consultar el pedido ahora. ¿Me envías de nuevo el número del "
+    "pedido y el e-mail de la compra?",
+}
+
+
+def order_lookup_correction_note(_: set[str]) -> str:
+    return (
+        "## Correção obrigatória (consulta do pedido)\n"
+        "A última mensagem do cliente já traz o número do pedido e o e-mail da compra. Não peça "
+        "esses dados de novo: chame agora get_order_status com eles (ou "
+        "check_return_eligibility, se for troca ou devolução) e responda com o resultado."
+    )
+
+
 # (opening, estimated delivery, tracking code, delayed → offer, closing, no order found)
 ORDER_DATE_ANSWER = {
     "pt": (

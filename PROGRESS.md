@@ -13,10 +13,9 @@ Update this file in the same commit as every plan step (see AGENTS.md §0 and §
 
 ## Next step
 
-**Stop for the owner's review of `scripts/record_conversations.py`** (local commit, not pushed;
-feature freeze: only bug fixes). Then, on the 120b: record the examples with the command under
-"Recording the examples" in the last log entry, review them, then the video and the final eval
-run if quota is left; fill the README TODOs.
+**Stop for the owner's review of the bug fixes from the video rehearsal** (pushed; see the last
+log entry). Feature freeze: only bug fixes. Then: record the examples on the 120b (command in
+the step 22 log entry), the video, the final eval run if quota is left, README TODOs.
 
 ## Plan status
 
@@ -1961,4 +1960,24 @@ run if quota is left; fill the README TODOs.
   scenarios, but the examples **plus** a full eval run (31 cases, ≈ 33 turns × 4.3–4.8K ≈
   140–160K) likely exceed one day's quota — keep the owner's order (examples, video, then the
   eval run if quota is left). Examples are never hand-edited (AGENTS.md §0.9): re-record instead.
+
+### 2026-11-02 — Bug fixes from the video rehearsal (Ollama gpt-oss:20b)
+- **1. Order data in the message must be looked up.** "E o pedido 9,
+  juliana.almeida@hayoo.com.br?" got no tool call, twice (the model asked again for the data
+  it had); "Pedido 9, <e-mail>" worked. New generic core check **`RequiredToolCheck`**
+  (`message_patterns`, `tools`, `forced_tools`): when the customer's last message matches
+  every pattern and none of the tools ran in the turn, it fails; with `forced_tools` the
+  guard's existing forced retry applies (tools narrowed to the order tools, `tool_choice`
+  "any"; Ollama ignores tool_choice, the narrowed tools + note remain). Client: patterns =
+  an e-mail and an order number — after pedido/order/compra ("E o pedido 9", "pedido nº 9")
+  or right before the e-mail ("9, ana@…"), never part of an amount ("R$ 1.000") — tools
+  `get_order_status`/`check_return_eligibility`; correction note "não peça esses dados de
+  novo"; localized safe answer if the retry still doesn't call. False positives would cost a
+  failed identity attempt, so a bare number elsewhere (phone, price) doesn't trigger (tested).
+  Tests: the trigger phrases (10 cases), the exact phrase forcing an order-tool call, no
+  forcing without an e-mail, pt/en safe answers. One existing protocol test had order data in
+  its message and a scripted answer without a lookup: its message changed (intent kept).
+  Eval case `order_data_in_a_follow_up_phrase` (routing, exact phrase, fresh session: lookup
+  of order 9, its status in the answer). Live (Ollama 20b, 4 runs): the lookup now happens
+  **4/4**, but the case failed 4/4 on the next bug (2), fixed in the following commit.
 

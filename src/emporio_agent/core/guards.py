@@ -14,6 +14,8 @@ emitted (see PROGRESS.md: streaming).
 - PhraseCheck: forbidden phrase patterns (e.g. robotic refusals that break the persona).
 - FieldLabelCheck: a value a tool returned must not get a wrong label (an order date called
   "Enviado em" / "entregue em": the data has no shipping or delivery date).
+- RequiredToolCheck: when the customer's message carries what a tool needs, the turn must call
+  it ("E o pedido 9, <e-mail>?" got a request for the data already given).
 
 Corrections must point to the right action (which tool to call), not only forbid: a check
 that only forbids can push the model to an evasive or wrong answer. A check with
@@ -284,6 +286,33 @@ class PhraseCheck:
     def problems(self, answer: str, history: Sequence[AnyMessage]) -> set[str]:
         text = _normalized(answer)
         return {m.group(0) for pattern in self.patterns for m in re.finditer(pattern, text)}
+
+    def correction(self, problems: set[str]) -> str:
+        return self.correction_note(problems)
+
+
+# --- messages that require a tool ----------------------------------------------------------
+
+
+@dataclass
+class RequiredToolCheck:
+    """If the customer's last message matches every one of `message_patterns`, one of `tools`
+    must have run in this turn; with `forced_tools`, the retry has to call one of them."""
+
+    message_patterns: Sequence[str]
+    tools: Sequence[str]
+    correction_note: Callable[[set[str]], str]
+    safe_answer: SafeAnswer
+    name: str = "required_tool"
+    forced_tools: Sequence[str] = ()
+
+    def problems(self, answer: str, history: Sequence[AnyMessage]) -> set[str]:
+        turn = current_turn(history)
+        message = next((m for m in turn if isinstance(m, HumanMessage)), None)
+        if message is None or not all(re.search(p, message.text) for p in self.message_patterns):
+            return set()
+        called = {m.name for m in turn if isinstance(m, ToolMessage)}
+        return set() if called & set(self.tools) else {self.name}
 
     def correction(self, problems: set[str]) -> str:
         return self.correction_note(problems)

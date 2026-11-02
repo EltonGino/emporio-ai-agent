@@ -10,6 +10,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from emporio_agent.client.assistant import (
     LANGUAGE_HINTS,
+    ORDER_LOOKUP_ANSWERS,
     SAFE_PAYMENT_ANSWERS,
     SAFE_PRICE_ANSWER,
     SAFE_PRICE_ANSWERS,
@@ -250,7 +251,8 @@ def test_invented_protocol_never_reaches_the_customer():
     honest = AIMessage("Sinto muito pela demora, Ana. Quer que eu registre o caso com a equipe?")
     model = ScriptedModel(script=[invented, honest])
     agent = guarded_agent(model)
-    result = run_turn(agent, "s1", "pedido 8, anacarol.ferreira@coldmail.com")
+    # No order data in the message: with it, the turn would also have to look the order up.
+    result = run_turn(agent, "s1", "meu pedido está atrasado, quero reclamar")
     assert result.text == honest.content
     assert "20231102-8745" in model.seen[-1][0].content  # the correction note named it
     history = agent.get_state({"configurable": {"thread_id": "s1"}}).values["messages"]
@@ -569,6 +571,38 @@ def test_order_date_safe_answer_states_the_facts(message, expected):
         script=[call("get_order_status", {"order_id": 8, "email": "a"}), wrong, wrong]
     )
     assert run_turn(guarded_agent(model, tools=[get_order_status]), "s1", message).text == expected
+
+
+def test_order_data_in_the_message_forces_an_order_lookup():
+    """Video rehearsal (20b): "E o pedido 9, <e-mail>?" got a request for the same data."""
+    asks_again = AIMessage("Pode me passar o número do pedido e o e-mail da compra?")
+    lookup = call("get_order_status", {"order_id": 9, "email": "juliana.almeida@hayoo.com.br"})
+    right = AIMessage("Seu pedido 8 está a caminho.")
+    model = ScriptedModel(script=[asks_again, lookup, right])
+    agent = guarded_agent(model, tools=[get_order_status, search_gd20])
+    result = run_turn(agent, "s1", "E o pedido 9, juliana.almeida@hayoo.com.br?")
+    assert result.text == right.content
+    assert model.bound[1] == (["get_order_status"], "any")  # order tools only, call required
+    assert "Correção obrigatória (consulta do pedido)" in model.seen[1][0].content
+
+
+def test_order_number_without_email_is_not_forced():
+    asks = AIMessage("Me passa também o e-mail da compra?")
+    model = ScriptedModel(script=[asks])
+    agent = guarded_agent(model, tools=[get_order_status])
+    assert run_turn(agent, "s1", "Quero ver o pedido 9").text == asks.content
+    assert [choice for _, choice in model.bound] == [None]
+
+
+@pytest.mark.parametrize(
+    "message, language",
+    [("E o pedido 9, juliana.almeida@hayoo.com.br?", "pt"), ("What about order 9, j@x.com?", "en")],
+)
+def test_order_lookup_safe_answer_when_the_retry_still_asks(message, language):
+    asks_again = AIMessage("Pode me passar o número do pedido e o e-mail?")
+    model = ScriptedModel(script=[asks_again, asks_again])  # Ollama ignores tool_choice
+    agent = guarded_agent(model, tools=[get_order_status])
+    assert run_turn(agent, "s1", message).text == ORDER_LOOKUP_ANSWERS[language]
 
 
 # --- history trimming ------------------------------------------------------------------------

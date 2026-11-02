@@ -1,3 +1,5 @@
+import re
+
 import pytest
 from langchain_core.messages import ToolMessage
 
@@ -312,3 +314,27 @@ def test_right_order_date_labels_pass(answer):
 
 def test_dates_need_an_order_result():
     assert order_date_check().problems("Enviado em 15/02/2026", [HumanMessage("oi")]) == set()
+
+
+# --- order data in the message requires a lookup --------------------------------------------
+
+from emporio_agent.client.assistant import EMAIL, ORDER_NUMBER  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    "message, has_order_data",
+    [
+        ("E o pedido 9, juliana.almeida@hayoo.com.br?", True),  # video rehearsal, 20b
+        ("Pedido 8, anacarol.ferreira@coldmail.com", True),
+        ("9, ana@x.com", True),  # the reply to "me passa o número e o e-mail"
+        ("pedido nº 9 e o email é x@y.com", True),
+        ("Order 9, a@b.com", True),
+        ("meu email é x@y.com", False),  # no order number
+        ("Pedido 8", False),  # no e-mail
+        ("Quanto custa? R$ 1.000, a@b.com", False),  # an amount, not an order
+        ("compra de R$ 1.000, a@b.com", False),
+        ("telefone (67) 99654-7821 e email x@y.com", False),
+    ],
+)
+def test_order_data_in_the_message(message, has_order_data):
+    assert bool(re.search(ORDER_NUMBER, message) and re.search(EMAIL, message)) is has_order_data

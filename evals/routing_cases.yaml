@@ -144,6 +144,17 @@ cases:
       answer_contains_any: ["28/02/2026", "28/02", "25 dias"]
       answer_not_matches: ["\\d{8}-\\d{3,}"]  # no protocol before the customer agrees
 
+  - id: order_data_in_a_follow_up_phrase
+    note: >-
+      Video rehearsal (20b): with this exact phrase the model asked again for the number and
+      the e-mail it had just been given, twice. The message carries both: look the order up.
+    turns: ["E o pedido 9, juliana.almeida@hayoo.com.br?"]
+    expect:
+      tools_any: [get_order_status]
+      tool_results_contain:
+        get_order_status: '"order_id":9'
+      answer_contains_any: ["confirmado", "preparacao"]
+
   - id: complaint_no_emoji
     now: "2026-03-25T10:30"
     turns:
