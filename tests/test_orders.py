@@ -137,6 +137,15 @@ def test_shipped_order_past_eta_is_delayed(make_tools):
     assert result["days_since_order"] == 38
 
 
+def test_order_date_is_described_as_the_purchase_date_not_shipping(make_tools):
+    """Owner's frontend test: the model presented order 8's order_date as "Data de envio"."""
+    tools = make_tools()
+    assert json.loads(status(tools, 8, ANA))["order_date"] == "15/02/2026"
+    description = tools["get_order_status"].description
+    assert "order_date = the day the order was placed" in description
+    assert "never a shipping date" in description
+
+
 def test_days_since_order_for_old_confirmed_order(make_tools):
     result = json.loads(status(make_tools("2026-03-25T10:30"), 9, "juliana.almeida@hayoo.com.br"))
     assert result["status_text"] == "confirmado, em preparação"

@@ -397,7 +397,8 @@ def build_tools(
     @tool(args_schema=OrderLookupArgs)
     def get_order_status(config: RunnableConfig, order_id: int = 0, email: str = "") -> str:
         """The customer's own order. Call only with the order number and purchase email the
-        customer gave.
+        customer gave. order_date = the day the order was placed (data do pedido), never a
+        shipping date: there is no shipping date.
         estimated_delivery is a forecast; days_since_order counts from the purchase. delayed
         (see days_since_estimated_delivery) or long pending/confirmed → acknowledge the wait,
         offer the team, never invent dates."""

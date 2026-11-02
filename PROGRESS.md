@@ -1744,4 +1744,10 @@ one customer per conversation). One local commit per fix, no push. Steps 22/23 r
   Live (Ollama 20b, real agent + `astream_turn` projector, "Tem o Giannini GF-3D?", 3 runs):
   every product cited got a card, in order (4–5 cards per run). Seen, not addressed: one run
   answered with a Markdown table despite the prompt's "sem tabelas".
+- **4. Order date.** The field was already `order_date` (order 8: 15/02/2026); its meaning
+  was only implied. Tool descriptions are where field meanings reach the model, so
+  `get_order_status` now says: "order_date = the day the order was placed (data do pedido),
+  never a shipping date: there is no shipping date" (≈ 20 tokens). Test on the description and
+  value. Live (Ollama 20b, order 8 + Ana's e-mail, 3 runs): no "Data de envio"; one run
+  labels it "Data do pedido: 15/02/2026", the others leave the date out.
 
