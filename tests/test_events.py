@@ -31,7 +31,7 @@ def agent_with(*models, tools=(), sleeps=None, guards=()):
         list(models),
         list(tools),
         "S",
-        lambda: "C",
+        lambda messages: "C",
         InMemorySaver(),
         20,
         2500,

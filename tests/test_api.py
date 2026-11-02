@@ -57,7 +57,14 @@ def make_api(tmp_path, policy_retriever):
                 verified_orders=verified_orders,
             )
             return build_agent(
-                [model], tools, "S", lambda: "C", checkpointer, 20, 2500, guards=[output_guard()]
+                [model],
+                tools,
+                "S",
+                lambda messages: "C",
+                checkpointer,
+                20,
+                2500,
+                guards=[output_guard()],
             )
 
         app = create_app(

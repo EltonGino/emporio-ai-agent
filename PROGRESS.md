@@ -13,11 +13,9 @@ Update this file in the same commit as every plan step (see AGENTS.md §0 and §
 
 ## Next step
 
-**Stop for the owner's review of the small redesign follow-up.** Zero/empty numeric search
-arguments, availability LEDs, mobile chip scrollbar and chat bold typography are addressed.
-Review `frontend/screenshots/vintage-ajustes-{desktop,mobile}.png` (gitignored). No push;
-the preceding redesign commits `fd22998` / `f6b2762` were approved for appearance by the owner.
-Steps 22/23 and broader evals remain pending and outside this follow-up.
+**Stop for the owner's review of the six fixes from the owner's frontend test on Ollama**
+(see the last log entry: language, forced tool call, product cards, order date, limit message,
+one customer per conversation). One local commit per fix, no push. Steps 22/23 remain pending.
 
 ## Plan status
 
@@ -1675,3 +1673,39 @@ Steps 22/23 and broader evals remain pending and outside this follow-up.
   The first screenshot attempt had no card because the model omitted the product name;
   the final images use a fresh conversation asking for the full name and PIX price.
 - Next: stop for owner review of this local commit. No push or subsequent plan step.
+
+
+### 2026-11-02 — Owner's frontend test on Ollama: six fixes (one commit each)
+- Owner tested the frontend on Ollama gpt-oss:20b and listed six problems. Starting HEAD
+  `0bc24fd`, clean tree; baseline `pytest -m "not llm"` 469 passed. All live checks below use
+  **only Ollama** (`--llm-provider ollama --llm-model gpt-oss:20b`, `OLLAMA_BASE_URL=
+  http://elton:11434`; the `.env` says groq, so every run passes the overrides). No Groq.
+- **1. Language.** Prompt: the language rule moved to the top of "Tom de voz" and now says
+  to answer entirely in the language of the customer's last message, first word to closing,
+  lists and notices included, never mixing; tool texts translated, product names and prices
+  as returned. **Prompt-only result: 0/2** (both answers fully Portuguese: prompt, tool
+  outputs and context are all Portuguese). Added a **per-call language hint**: `DynamicContext`
+  now passes the conversation to the context provider (`Callable[[messages], str]`, core);
+  the client layer detects the last customer message's language with small function-word
+  lists (`detect_language`: pt/en/es, unclear → None = default rule, no dependency) and, for
+  English/Spanish, appends a short directive **written in that language** after "## Agora"
+  (still after the static, cacheable prefix). Side effect found and handled: the model then
+  searched the Portuguese-only catalog in English (`category: "drums"` → `unknown_category`,
+  read as "not carried") → `search_products` description: translate query/category words to
+  Portuguese ("bateria", not "drums"); unknown_category = search again with a listed one.
+  Eval cases `language_spanish` and `language_english_follow_up` (routing). Both first passed
+  on language keywords while saying "no tenemos guitarras eléctricas" / "we don't carry
+  drums" (false, after 0-result searches), so they now require a real product name (a guitar
+  model; "Kit 1/2/3 Studio") plus no Portuguese markers.
+  Results (Ollama 20b): `language_spanish` **5/5 passes** with the strict check (fully Spanish);
+  `language_english_follow_up` **fails 3/3**: both answers are in English, but the 20b sends
+  `category "Baterias e Percussão"` with `query "drums"` (0 results) and says there are no
+  drums. **Open (owner's decision, not implemented):** the catalog only understands
+  Portuguese. Options: (a) when a category matches but no product in it matches any query
+  term, return the category as `partial_match` (generic, small); (b) a small EN→PT synonym
+  list for catalog nouns (drums → bateria; careful: "acoustic guitar" = violão, not
+  guitarra). Also pre-existing: `query "elétrica"` + `category "guitarras"` → 0 results
+  (guitar products don't carry the word; "guitarra elétrica" alone works via partial match).
+  Known gap: the guard's safe answers are fixed Portuguese texts, so an English/Spanish
+  customer who triggers one gets Portuguese.
+

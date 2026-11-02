@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime
 
 import pytest
 from fakes import ProviderError, ScriptedModel, call
@@ -8,13 +9,17 @@ from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
 
 from emporio_agent.client.assistant import (
+    LANGUAGE_HINTS,
     SAFE_PRICE_ANSWER,
     SAFE_PROTOCOL_ANSWER,
     SAFE_REFUSAL_ANSWER,
+    context_provider,
+    detect_language,
     model_chain,
     output_guard,
     render_system_prompt,
 )
+from emporio_agent.clock import get_clock
 from emporio_agent.config import Settings, get_client_config
 from emporio_agent.core.agent import (
     FAILED_MESSAGE,
@@ -33,7 +38,15 @@ CONTEXT = "## Agora\nquarta-feira, 25/03/2026 às 10:30."
 def agent_with(*models, tools=(), sleeps=None):
     sleep = sleeps.append if sleeps is not None else lambda seconds: None
     return build_agent(
-        list(models), list(tools), STATIC, lambda: CONTEXT, InMemorySaver(), 20, 2500, 15, sleep
+        list(models),
+        list(tools),
+        STATIC,
+        lambda messages: CONTEXT,
+        InMemorySaver(),
+        20,
+        2500,
+        15,
+        sleep,
     )
 
 
@@ -213,7 +226,7 @@ def guarded_agent(*models, tools=()):
         list(models),
         list(tools),
         STATIC,
-        lambda: CONTEXT,
+        lambda messages: CONTEXT,
         InMemorySaver(),
         20,
         2500,
@@ -455,6 +468,43 @@ def test_system_prompt_has_official_contacts_only():
     assert "3321-4500" not in prompt and "empóriodamusica" not in prompt
     assert "$" not in prompt.replace("R$", "")  # every placeholder filled
     assert "Não indique outras lojas." in prompt  # P4: no partner stores
+
+
+@pytest.mark.parametrize(
+    "text, language",
+    [
+        ("¿Tienen guitarras eléctricas?", "es"),  # owner's frontend test
+        ("¿Cuánto cuesta el Yamaha C70?", "es"),
+        ("And about drums?", "en"),  # owner's frontend test
+        ("Do you have electric guitars?", "en"),
+        ("Quais violões até R$ 1.000?", "pt"),
+        ("Oi! Você sabe meu nome?", "pt"),
+        ("ok", None),  # unclear: the default rule (Portuguese) applies
+        ("GD20", None),
+    ],
+)
+def test_detect_language(text, language):
+    assert detect_language(text) == language
+
+
+def test_language_hint_follows_the_last_customer_message():
+    context = context_provider(get_client_config(), get_clock(datetime(2026, 3, 25, 10, 30)))
+    spanish = context([HumanMessage("Quais violões?"), AIMessage("..."), HumanMessage("¿Y bajos?")])
+    assert spanish.startswith("## Agora\nquarta-feira, 25/03/2026")
+    assert spanish.endswith(LANGUAGE_HINTS["es"])
+    english = context(
+        [HumanMessage("And about drums?"), AIMessage("..."), ToolMessage("{}", tool_call_id="c")]
+    )
+    assert english.endswith(LANGUAGE_HINTS["en"])  # tool messages after it don't matter
+    assert "## Language" not in context(
+        [HumanMessage("And about drums?"), HumanMessage("Tem bateria?")]
+    )
+
+
+def test_prompt_language_rule_covers_the_whole_answer():
+    prompt = render_system_prompt(get_client_config())
+    assert "idioma da última mensagem do cliente" in prompt
+    assert "nunca misture idiomas" in prompt
 
 
 def test_partner_stores_rule_comes_from_config():

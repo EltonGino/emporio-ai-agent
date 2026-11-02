@@ -198,7 +198,7 @@ def factory_for(*script):
             [ScriptedModel(script=list(script))],
             [search_policies, get_order_status],
             "S",
-            lambda: "C",
+            lambda messages: "C",
             InMemorySaver(),
             20,
             2500,

@@ -263,6 +263,9 @@ def build_tools(
         limit: int = 5,
     ) -> str:
         """Catalog search (price, promotion, availability); use for any product question.
+        The catalog is in Portuguese: translate every query and category word, whatever the
+        customer's language (query "bateria", not "drums"). unknown_category lists the real
+        categories: search again with one.
         Shows `limit` of total_matches: say nothing about items not shown. availability:
         disponivel | esgotado | descontinuado | em_breve (not for sale yet). unavailable =
         exact matches not for sale now; offer only the returned alternatives. partial_match =

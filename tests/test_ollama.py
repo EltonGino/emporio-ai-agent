@@ -41,7 +41,7 @@ def test_ollama_model_chain_is_one_model_with_explicit_context_and_reasoning():
 
 
 def agent_with(model, policy):
-    return build_agent([model], [], "S", lambda: "C", InMemorySaver(), 20, 2500, **policy)
+    return build_agent([model], [], "S", lambda messages: "C", InMemorySaver(), 20, 2500, **policy)
 
 
 def test_ollama_has_no_rate_limit_handling():
@@ -99,7 +99,7 @@ def test_cli_provider_and_model_options(monkeypatch, tmp_path):
     def builder(settings, client, clock):
         seen["settings"] = settings
         return build_agent(
-            [ScriptedModel(script=[])], [], "S", lambda: "C", InMemorySaver(), 20, 2500
+            [ScriptedModel(script=[])], [], "S", lambda messages: "C", InMemorySaver(), 20, 2500
         )
 
     monkeypatch.setattr(cli, "build_chat_agent", builder)

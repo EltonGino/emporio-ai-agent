@@ -68,6 +68,27 @@ cases:
       no_tools: true
       answer_contains: ["instrumento"]
 
+  # --- language ------------------------------------------------------------------------------
+  # Owner's frontend test: Spanish began "¡Claro!" and went on in Portuguese; English got
+  # Portuguese. The whole answer must be in the customer's language (lists and closing too).
+  - id: language_spanish
+    turns: ["¿Tienen guitarras eléctricas?"]
+    expect:
+      tools_any: [search_products]
+      # A real guitar (a run said "no tenemos guitarras eléctricas" after a 0-result search).
+      answer_contains_any: ["Telecaster", "Stratocaster", "Les Paul", "Custom 24", "RG550"]
+      answer_not_contains: ["temos", "voce", "disponiveis", "aqui estao", "opcoes", "desculpe"]
+
+  - id: language_english_follow_up
+    note: >-
+      A short follow-up still needs a catalog search, answered in English. The catalog is in
+      Portuguese: the search must use "bateria", or the answer wrongly says there are no drums.
+    turns: ["Do you have electric guitars?", "And about drums?"]
+    expect:
+      tools_any: [search_products]
+      answer_contains_any: ["Kit 1 Studio", "Kit 2 Studio", "Kit 3 Studio"]
+      answer_not_contains: ["temos", "voce", "disponiveis", "aqui estao", "tenemos", "desculpe"]
+
   # --- policies ------------------------------------------------------------------------------
   - id: defect_policy_general
     note: >-

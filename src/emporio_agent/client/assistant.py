@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import uuid
 from collections.abc import Callable, Sequence
 from datetime import datetime
@@ -10,8 +11,9 @@ from string import Template
 
 from langchain.chat_models import init_chat_model
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AnyMessage
+from langchain_core.messages import AnyMessage, HumanMessage
 from langgraph.checkpoint.base import BaseCheckpointSaver
+from unidecode import unidecode
 
 from emporio_agent.client.db.engine import make_engine
 from emporio_agent.client.db.loader import ensure_store_data
@@ -241,11 +243,53 @@ def render_system_prompt(client: ClientConfig) -> str:
     ).strip()
 
 
+# Function words that tell the three supported languages apart (accents stripped). Owner's
+# frontend test: with only the prompt rule, the 20b answered Spanish and English customers in
+# Portuguese (the prompt, the tool outputs and the context are all Portuguese).
+LANGUAGE_WORDS = {
+    "pt": {"voce", "voces", "tem", "quero", "qual", "quais", "quanto", "um", "uma", "nao",
+           "e", "meu", "minha", "pra", "com", "obrigado", "obrigada", "oi", "ola", "vendem",
+           "onde", "quando", "preco", "sim", "isso", "esse", "essa", "tambem", "gostaria"},
+    "en": {"the", "and", "you", "your", "do", "does", "have", "has", "about", "what", "which",
+           "how", "is", "are", "can", "my", "i", "want", "any", "for", "with", "please", "hi",
+           "hello", "thanks", "price", "much", "sell", "where", "when", "there"},
+    "es": {"tienen", "tiene", "tienes", "hola", "quiero", "cuanto", "cuesta", "cuales",
+           "usted", "ustedes", "gracias", "puedo", "hay", "los", "las", "el", "y", "es", "son",
+           "mi", "venden", "donde", "cuando", "precio", "necesito", "busco", "electricas",
+           "electrica", "electrico", "tambien", "algun", "alguna"},
+}  # fmt: skip
+# Written in the target language: closer to what the model must produce than a Portuguese rule.
+LANGUAGE_HINTS = {
+    "en": "## Language\nThe customer's last message is in English. Write your whole answer in "
+    "English, from the first word to the closing, lists included. Product names and prices "
+    "stay as the tools return them.",
+    "es": "## Idioma\nEl último mensaje del cliente está en español. Escribe toda la respuesta "
+    "en español, de la primera palabra al cierre, listas incluidas. Los nombres de productos y "
+    "los precios quedan como los devuelven las herramientas.",
+}
+
+
+def detect_language(text: str) -> str | None:
+    """ "pt", "en" or "es" when one language clearly has more function words; else None
+    (e.g. "Pedido 8, x@y.com"), which keeps the default rule (Portuguese)."""
+    words = re.findall(r"[a-z]+", unidecode(text).lower())
+    scores = {lang: sum(w in vocab for w in words) for lang, vocab in LANGUAGE_WORDS.items()}
+    best, *rest = sorted(scores, key=scores.get, reverse=True)
+    return best if scores[best] > 0 and all(scores[best] > scores[r] for r in rest) else None
+
+
+def language_hint(messages: Sequence[AnyMessage]) -> str:
+    """Hint for an English/Spanish last customer message ("" for Portuguese or unclear)."""
+    last = next((m for m in reversed(messages) if isinstance(m, HumanMessage)), None)
+    return LANGUAGE_HINTS.get(detect_language(last.text) if last else None, "")
+
+
 def context_provider(client: ClientConfig, clock: Clock):
-    """Per-call context appended after the static prompt (date/time and open/closed)."""
+    """Per-call context appended after the static prompt (date/time, open/closed and, for an
+    English/Spanish customer message, a language hint)."""
     calendar = HolidayCalendar(client.store.holidays)
 
-    def context() -> str:
+    def context(messages: Sequence[AnyMessage]) -> str:
         status = store_status(clock.now(), client.store, calendar)
         if status.is_open:
             state = f"Loja aberta agora (fecha às {status.closes_at:%H:%M})."
@@ -253,7 +297,8 @@ def context_provider(client: ClientConfig, clock: Clock):
             reason = f" ({status.holiday})" if status.holiday else ""
             back = f" Abre {br_datetime(status.next_opening)}." if status.next_opening else ""
             state = f"Loja fechada agora{reason}.{back}"
-        return f"## Agora\n{br_datetime(status.now)} (horário de Campo Grande). {state}"
+        now = f"## Agora\n{br_datetime(status.now)} (horário de Campo Grande). {state}"
+        return "\n\n".join(filter(None, [now, language_hint(messages)]))
 
     return context
 

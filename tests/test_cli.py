@@ -39,7 +39,7 @@ def fake_agent(monkeypatch, tmp_path):
         def build(settings, client, clock):
             seen_clocks.append(clock)
             return build_agent(
-                [model], [search_policies], "S", lambda: "C", InMemorySaver(), 20, 2500
+                [model], [search_policies], "S", lambda messages: "C", InMemorySaver(), 20, 2500
             )
 
         monkeypatch.setattr(cli, "build_chat_agent", build)

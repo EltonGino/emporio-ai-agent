@@ -173,13 +173,17 @@ def _give_up(error: Exception | None) -> AIMessage:
 
 
 class DynamicContext(AgentMiddleware):
-    def __init__(self, context: Callable[[], str]) -> None:
+    """Appends per-call context after the static prompt; it may depend on the conversation
+    (e.g. the language of the last customer message)."""
+
+    def __init__(self, context: Callable[[Sequence[AnyMessage]], str]) -> None:
         super().__init__()
         self.context = context
 
     def _with_context(self, request: ModelRequest) -> ModelRequest:
         static = request.system_message.text if request.system_message else ""
-        return request.override(system_message=SystemMessage(f"{static}\n\n{self.context()}"))
+        context = self.context(request.messages)
+        return request.override(system_message=SystemMessage(f"{static}\n\n{context}"))
 
     def wrap_model_call(self, request, handler):
         return handler(self._with_context(request))
@@ -272,7 +276,7 @@ def build_agent(
     models: Sequence[BaseChatModel],
     tools: Sequence[BaseTool],
     system_prompt: str,
-    context: Callable[[], str],
+    context: Callable[[Sequence[AnyMessage]], str],
     checkpointer: BaseCheckpointSaver,
     history_max_messages: int,
     history_max_tokens: int,
