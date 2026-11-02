@@ -13,17 +13,10 @@ Update this file in the same commit as every plan step (see AGENTS.md §0 and §
 
 ## Next step
 
-**Stop for the owner's review of the local regression fixes** (protocol typography and
-truthful fallback, refusal patterns, Sunday-hours expectation). The three requested cases
-pass on Ollama gpt-oss:20b; the full non-LLM suite passes (440 tests). No push in this
-follow-up. At takeover, HEAD and the local `origin/main` reference both pointed to e96cea0
-(step 21), so the preceding "not pushed" note was stale relative to those local references;
-no remote fetch/push was performed.
-
-Do not start another plan step before the owner reviews this commit. Remaining deliverables:
-step 22 recorded conversations and step 23 README; the previous official-model/quota plan
-still applies to those future runs. `expired_black_friday` and `delayed_order_flow` remain
-unresolved local 20b limitations; they were not rerun in this focused follow-up.
+Continue the owner-authorized vintage-amplifier frontend redesign. The API changes below
+are ready; finish the frontend commit with screenshots and validation, then stop for review.
+Do not push. Starting HEAD was the owner-approved/pushed `07ce0e1`; the working tree was clean.
+Steps 22/23 and broader LLM evals remain outside this follow-up.
 
 ## Plan status
 
@@ -1591,3 +1584,29 @@ unresolved local 20b limitations; they were not rerun in this focused follow-up.
   Result: 3/3 passed; report and guard metrics recorded under Known issues above.
 - Next step: stop for owner review of this single local fix commit. No push; steps 22/23
   and any broader LLM rerun are outside this follow-up.
+
+
+### 2026-11-02 — Vintage redesign: public store status and product events
+- Owner scope overrides the earlier stop: implement the vintage frontend, with separate local
+  API/frontend commits allowed, no push, then stop for review. Read this full log; audited
+  `git status` and `git log --oneline -5` (clean, HEAD `07ce0e1`).
+- `/api/config.store_status` reuses `store_status` + `store_status_data` and the BR/MS holiday
+  calendar with the configured `AGENT_NOW` (or current store-local time).
+- Added customer-visible `products` SSE event, also outside demo mode. The API injects the
+  client-layer projector into the async stream; it runs after the graph/output guard finishes,
+  using complete successful catalog tool results from this turn only. It never parses model
+  text for prices or reads the database/history to fill missing fields. Name matching accepts
+  full catalog names or distinctive alphanumeric model codes (accent/hyphen insensitive).
+  Brand-only/ambiguous wording can intentionally omit a card. Fields are allowlisted: id,
+  name, formatted price, promotion percentage/final price, applicable non-promo PIX price,
+  availability. No descriptions, specs, stock counts, or identity data are projected.
+- Tests cover customer-mode delivery, public-field projection, promo and PIX values, omission
+  after guard correction, previous-turn isolation, Sunday/Saturday closing and Finados status.
+- Checks: ruff check + format check passed; full non-LLM suite **446 passed**, 28 deselected;
+  frontend build/lint passed. `UV_CACHE_DIR=/tmp/emporio-uv` avoids the restricted default cache.
+  One earlier test run had a transient timestamp substring collision in the existing protocol
+  test (it scans serialized events for `9998`/`9999`); focused rerun and full reruns passed.
+- Live API/UI validation used only Ollama `gpt-oss:20b` at `http://elton:11434`, no Groq:
+  GD20: R$ 2.199,00 / R$ 2.089,05 PIX; Ohana CK-20: R$ 549,00 / 20% / R$ 439,20.
+  Customer-mode API also returned the GD20 card and Sunday reopening status correctly.
+- Next: commit the frontend presentation and review screenshots, then stop. No push.

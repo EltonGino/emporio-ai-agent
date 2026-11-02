@@ -11,6 +11,7 @@ from sqlalchemy import insert, select, text
 from sqlalchemy.orm import Session
 
 from emporio_agent.api.main import create_app
+from emporio_agent.client.assistant import output_guard
 from emporio_agent.client.db.engine import make_engine
 from emporio_agent.client.db.loader import ensure_store_data
 from emporio_agent.client.db.models import Handoff
@@ -55,7 +56,9 @@ def make_api(tmp_path, policy_retriever):
                 failed_lookups=failed_lookups,
                 verified_orders=verified_orders,
             )
-            return build_agent([model], tools, "S", lambda: "C", checkpointer, 20, 2500)
+            return build_agent(
+                [model], tools, "S", lambda: "C", checkpointer, 20, 2500, guards=[output_guard()]
+            )
 
         app = create_app(
             settings,
@@ -93,6 +96,12 @@ def test_health_and_config(make_api):
             "slogan": "Sua música começa aqui.",
             "demo_mode": True,
             "simulated_now": "2026-03-25T10:30",
+            "store_status": {
+                "now": "quarta-feira, 25/03/2026 às 10:30",
+                "is_open": True,
+                "today_hours": "09:00–18:00",
+                "closes_at": "18:00",
+            },
         }
 
 
@@ -114,7 +123,7 @@ def test_outside_demo_mode_only_customer_events_are_sent(make_api, tmp_path):
     with client:
         assert client.get("/api/config").json()["demo_mode"] is False
         types = {e["type"] for e in sse_events(chat(client, "quanto custa o GD20?"))}
-    assert types == {"user_message", "token", "final"}  # no tool_*, retrieval or notice
+    assert types == {"user_message", "token", "final", "products"}  # no tool_*, retrieval or notice
     trace = (tmp_path / "traces" / "s1.jsonl").read_text()
     assert '"tool_start"' in trace  # the server-side trace still has everything
 
@@ -369,3 +378,59 @@ def test_in_memory_lockout_per_client():
     assert lookups.locked("s3", "ip") and not lookups.locked("s3", None)
     assert identity.client_key({"configurable": {"client_key": "k"}}) == "k"
     assert identity.client_key(None) is None
+
+
+@pytest.mark.parametrize(
+    "now,is_open,next_day",
+    [
+        (datetime(2026, 3, 29, 10), False, "30/03/2026"),
+        (datetime(2026, 11, 2, 10), False, "03/11/2026"),
+        (datetime(2026, 3, 28, 13, 1), False, "30/03/2026"),
+    ],
+)
+def test_config_uses_store_clock_and_calendar(make_api, now, is_open, next_day):
+    client, _, _ = make_api(agent_now=now)
+    with client:
+        status = client.get("/api/config").json()["store_status"]
+    assert status["is_open"] is is_open
+    assert next_day in status["next_opening"]
+
+
+def test_product_cards_only_public_tool_fields_and_mentioned_products(make_api):
+    client, _, _ = make_api(
+        call("list_active_promotions", {}), AIMessage("Temos o Ohana CK-20."), demo_mode=False
+    )
+    with client:
+        events = sse_events(chat(client))
+    cards = next(e["data"]["products"] for e in events if e["type"] == "products")
+    assert len(cards) == 1 and "CK-20" in cards[0]["name"]
+    assert set(cards[0]) == {"id", "name", "price_text", "availability", "promo"}
+    assert set(cards[0]["promo"]) == {"percent", "final_price_text"}
+
+
+def test_cards_follow_corrected_final_answer_and_do_not_leak_previous_turn(make_api):
+    client, _, _ = make_api(
+        GD20,
+        AIMessage("GD20 por R$ 999.999,00"),
+        AIMessage("Quer ajuda com um instrumento?"),
+        AIMessage("O Takamine GD20 é uma opção."),
+        demo_mode=False,
+    )
+    with client:
+        first = sse_events(chat(client))
+        second = sse_events(chat(client, "e agora?"))
+    assert all(e["type"] != "products" for e in first + second)
+    assert "999.999" not in str(first)
+
+
+def test_product_card_pix_comes_from_tool(make_api):
+    client, _, _ = make_api(GD20, ANSWER, demo_mode=False)
+    with client:
+        events = sse_events(chat(client))
+    product_event = next(e for e in events if e["type"] == "products")
+    card = product_event["data"]["products"][0]
+    assert card["pix_price_text"] == "R$ 2.089,05"
+    assert card["price_text"] == "R$ 2.199,00"
+    assert events.index(product_event) > max(
+        i for i, e in enumerate(events) if e["type"] == "user_message"
+    )

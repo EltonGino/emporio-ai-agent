@@ -1,7 +1,8 @@
 """One event stream per turn, shared by the CLI (--debug), the API (SSE) and the JSONL tracer.
 
 Events: user_message, tool_start, tool_end, retrieval, notice (middleware decisions: 429
-waits/fallbacks, invalid tool call retries, protocol guard), token, final, error.
+waits/fallbacks, invalid tool call retries, protocol guard), token, final, error,
+products (public catalog cards).
 Only the final answer's `content` is ever emitted as text, never reasoning. The final answer
 is emitted only after the output guards validated it (it is the state's last message), so
 `token` events replay the validated text in small chunks rather than live LLM tokens.
@@ -13,7 +14,7 @@ import contextlib
 import logging
 import re
 import time
-from collections.abc import AsyncIterator, Iterator, Sequence
+from collections.abc import AsyncIterator, Callable, Iterator, Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -25,10 +26,18 @@ from pydantic import BaseModel, Field
 logger = logging.getLogger(__name__)
 
 EventType = Literal[
-    "user_message", "tool_start", "tool_end", "retrieval", "notice", "token", "final", "error"
+    "user_message",
+    "tool_start",
+    "tool_end",
+    "retrieval",
+    "notice",
+    "token",
+    "final",
+    "error",
+    "products",
 ]
 # What a customer may receive. tool_*, retrieval and notice are for the demo panel and traces.
-CUSTOMER_EVENTS = frozenset({"user_message", "token", "final", "error"})
+CUSTOMER_EVENTS = frozenset({"user_message", "token", "final", "error", "products"})
 
 ERROR_MESSAGE = "Desculpe, tive um problema técnico agora. Pode tentar de novo em instantes?"
 RESULT_PREVIEW_CHARS = 300
@@ -93,6 +102,7 @@ class _Turn:
         self.pending: dict[str, tuple[str, float]] = {}  # tool_call_id → (name, start)
         self.usage = TurnUsage()
         self.answer = ""
+        self.tool_results: list[ToolMessage] = []
 
     def event(self, type_: EventType, **data: Any) -> AgentEvent:
         return AgentEvent(type=type_, session_id=self.session_id, data=data)
@@ -129,6 +139,7 @@ class _Turn:
         return events
 
     def _tool_end(self, message: ToolMessage) -> list[AgentEvent]:
+        self.tool_results.append(message)
         name, start = self.pending.pop(message.tool_call_id, (message.name, None))
         events = [
             self.event(
@@ -190,10 +201,13 @@ async def astream_turn(
     text: str,
     retrieval_tools: Sequence[str] = ("search_policies",),
     context: dict[str, Any] | None = None,
+    product_projector: Callable[[str, list[ToolMessage]], list[dict[str, Any]]] | None = None,
 ) -> AsyncIterator[AgentEvent]:
     """Async `stream_turn` (the API): async model calls and checkpointer; sync tools run in
     LangChain's worker threads, so the event loop is never blocked. `context` adds entries to
     the run config the tools read (e.g. the client key for the per-IP lockout)."""
+    # The optional client-layer projector runs only after the graph/guards finish, using
+    # complete tool messages from this invocation, never previews or checkpoint history.
     turn = _Turn(session_id, text, retrieval_tools, context)
     yield turn.event("user_message", text=text)
     try:
@@ -203,6 +217,8 @@ async def astream_turn(
     except Exception as exc:
         yield turn.error(exc)
         return
+    if product_projector and (products := product_projector(turn.answer, turn.tool_results)):
+        yield turn.event("products", products=products)
     for event in turn.finish():
         yield event
 

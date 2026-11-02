@@ -39,7 +39,10 @@ from emporio_agent.client.identity import (
     SqlVerifiedOrders,
     VerifiedOrderStore,
 )
+from emporio_agent.client.product_cards import product_cards
 from emporio_agent.client.repository import SqlStoreRepository
+from emporio_agent.client.rules import HolidayCalendar, store_status
+from emporio_agent.client.tools import store_status_data
 from emporio_agent.clock import SystemClock, get_clock, to_store_time
 from emporio_agent.config import (
     PROJECT_ROOT,
@@ -259,6 +262,17 @@ def create_app(
             slogan=client.store.slogan,
             demo_mode=settings.demo_mode,
             simulated_now=simulated_now(settings, client),
+            store_status=store_status_data(
+                store_status(
+                    (
+                        to_store_time(settings.agent_now, client.store.tz)
+                        if settings.agent_now
+                        else SystemClock(client.store.tz).now()
+                    ),
+                    client.store,
+                    HolidayCalendar(client.store.holidays),
+                )
+            ),
         )
 
     @app.post("/api/chat", response_model=None)
@@ -299,7 +313,13 @@ def create_app(
 
 async def _sse(state: ApiState, session_id: str, message: str, key: str) -> AsyncIterator[str]:
     # The client key reaches the tools through the run config (per-IP identity lockout).
-    async for event in astream_turn(state.agent, session_id, message, context={"client_key": key}):
+    async for event in astream_turn(
+        state.agent,
+        session_id,
+        message,
+        context={"client_key": key},
+        product_projector=product_cards,
+    ):
         await asyncio.to_thread(state.tracer.write, event)  # the trace keeps everything
         if (visible := for_client(event, state.settings.demo_mode)) is not None:
             yield f"data: {visible.model_dump_json()}\n\n"

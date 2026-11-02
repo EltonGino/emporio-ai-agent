@@ -23,6 +23,7 @@ class ChatRequest(BaseModel):
 
 
 class ConfigResponse(BaseModel):
+    store_status: dict
     assistant_name: str
     store_name: str
     slogan: str
