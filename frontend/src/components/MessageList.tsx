@@ -53,7 +53,11 @@ function Bubble({ message, assistantName }: { message: ChatMessage; assistantNam
               <p className="product-price mt-1 text-2xl">{p.promo?.final_price_text ?? p.price_text}</p>
               {p.pix_price_text ? <p className="text-sm text-burgundy">{p.pix_price_text} no PIX</p> : null}
               <p className="mt-2 flex items-center gap-2 text-sm text-walnut-soft">
-                <span className="led text-tolex" aria-hidden="true" />
+                <span
+                  className={`led ${p.availability === 'disponivel' ? 'text-console-green'
+                    : p.availability === 'esgotado' ? 'text-amber' : 'led-off'}`}
+                  aria-hidden="true"
+                />
                 {{ disponivel: 'Disponível', esgotado: 'Temporariamente indisponível',
                   descontinuado: 'Fora de catálogo', em_breve: 'Chega em breve' }[p.availability] ?? p.availability}
               </p>

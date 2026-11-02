@@ -15,7 +15,7 @@ from typing import Any, Literal
 
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, tool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationInfo, field_validator
 
 from emporio_agent.client import identity, matching
 from emporio_agent.client.db.models import ORDER_HANDOFF_REASONS
@@ -112,11 +112,19 @@ def product_summary(
 class SearchProductsArgs(BaseModel):
     query: str = Field("", description="Name, brand, model or feature")
     category: str = Field("", description="e.g. violões, ukulele")
-    min_price: float = Field(0, ge=0, description="BRL, final price")
+    min_price: float = Field(0, ge=0, description="BRL, final price; 0 = no limit")
     max_price: float = Field(0, ge=0, description="BRL, final price; 0 = no limit")
     only_available: bool = True
     on_promotion: bool = Field(False, description="Only items with an active promotion")
-    limit: int = Field(5, ge=1, le=10)
+    limit: int = Field(5, ge=0, le=10, description="Result cap; 0 = default (5)")
+
+    @field_validator("min_price", "max_price", "limit", mode="before")
+    @classmethod
+    def empty_numbers_use_defaults(cls, value: Any, info: ValidationInfo) -> Any:
+        # Keep simple numeric provider schemas, while tolerating empty local tool arguments.
+        if value is None or (isinstance(value, str) and not value.strip()) or value in (0, "0"):
+            return cls.model_fields[info.field_name].default
+        return value
 
 
 class ProductIdArgs(BaseModel):

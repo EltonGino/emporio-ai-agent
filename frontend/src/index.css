@@ -105,7 +105,7 @@ body {
 }
 .chat-markdown strong {
   font-weight: 600;
-  font-family: var(--font-display);
+  font-family: var(--font-sans);
   color: var(--color-burgundy-deep);
 }
 
@@ -116,4 +116,14 @@ body {
 .tolex-header :focus-visible,
 aside :focus-visible {
   outline-color: var(--color-maple);
+}
+
+.led-off {
+  color: #827d72;
+  box-shadow: none;
+}
+
+@media (max-width: 639px) {
+  .suggestion-chips { scrollbar-width: none; }
+  .suggestion-chips::-webkit-scrollbar { display: none; }
 }

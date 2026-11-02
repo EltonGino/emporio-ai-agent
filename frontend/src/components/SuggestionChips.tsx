@@ -9,7 +9,7 @@ export function SuggestionChips({
 }) {
   if (suggestions.length === 0) return null
   return (
-    <div className="flex gap-2 overflow-x-auto pb-1 sm:flex-wrap" aria-label="Sugestões">
+    <div className="suggestion-chips flex gap-2 overflow-x-auto pb-1 sm:flex-wrap" aria-label="Sugestões">
       {suggestions.slice(0, 5).map((s) => (
         <button
           key={s}

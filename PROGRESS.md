@@ -13,10 +13,11 @@ Update this file in the same commit as every plan step (see AGENTS.md §0 and §
 
 ## Next step
 
-**Stop for the owner's review of the vintage-amplifier redesign.** Two local commits cover
-public API status/product events and the frontend. No push. Review `frontend/screenshots/`
-(`vintage-*.png`, gitignored); desktop/mobile, demo/customer mode and real product cards.
-Starting approved/pushed HEAD was `07ce0e1`. Steps 22/23 and broader evals remain pending.
+**Stop for the owner's review of the small redesign follow-up.** Zero/empty numeric search
+arguments, availability LEDs, mobile chip scrollbar and chat bold typography are addressed.
+Review `frontend/screenshots/vintage-ajustes-{desktop,mobile}.png` (gitignored). No push;
+the preceding redesign commits `fd22998` / `f6b2762` were approved for appearance by the owner.
+Steps 22/23 and broader evals remain pending and outside this follow-up.
 
 ## Plan status
 
@@ -1644,3 +1645,33 @@ Starting approved/pushed HEAD was `07ce0e1`. Steps 22/23 and broader evals remai
 - Commit note: API commit fd22998's explanatory body contains literal `\n` separators due
   to shell quoting; left untouched to preserve history. This frontend commit uses a message file.
 - Next: stop for owner review. No push; do not proceed to steps 22/23 without authorization.
+
+
+### 2026-11-02 — Redesign review: numeric sentinels and visual details
+- Owner requested one local follow-up commit, updated screenshots, no push, then stop.
+  Starting HEAD `f6b2762`, clean working tree. No earlier commits were pushed in this turn.
+- Confirmed `min_price=0` and `max_price=0` already mean no price bound. Regression tests
+  first reproduced 11 failures for empty arguments and limit zero. Added a before-validator
+  for numeric optional search arguments: null, empty/whitespace string and zero use defaults.
+  Price defaults are zero (no bound); `limit` is a result cap, not a filter, so empty/zero
+  retains the default cap of 5 (never unbounded). Its numeric schema now permits zero and
+  describes the sentinel; negative values, invalid numbers and caps above 10 remain rejected.
+- Tests exercise each price bound independently while preserving the opposite active bound,
+  all numeric arguments empty together, omitted/default equivalence, invalid values and real
+  positive bounds/caps. The tool boundary is tested through LangChain `tool.invoke`.
+- Cards: available LED uses the same green as Bastidores; out-of-stock is amber; discontinued
+  and coming-soon use gray without glow. Availability text remains and LEDs are aria-hidden.
+  Mobile chip scrollbars are hidden (standard and WebKit CSS) while horizontal scrolling stays.
+  Chat Markdown bold uses Source Sans 3; card headings/main prices still use Oswald.
+- Checks: focused catalog tests **79 passed**; `uv run ruff check .`, `uv run ruff format
+  --check .`, `uv run pytest -m "not llm"` **469 passed**, 28 deselected; frontend build/lint
+  passed. Used `UV_CACHE_DIR=/tmp/emporio-uv` as in the previous follow-up.
+- Real API screenshots: only Ollama `gpt-oss:20b` at `http://elton:11434`, no Groq; simulated
+  2026-03-25 10:30. `vintage-ajustes-desktop.png` (1440x1000, Bastidores open) and
+  `vintage-ajustes-mobile.png` (390x844 @2x, drawer closed), in `frontend/screenshots/`.
+  Visually inspected both. Browser computed styles confirm Source Sans 3 bold, Oswald card
+  headings/prices, green LED rgb(156,204,101); mobile scrollbar-width=none, overflow-x=auto,
+  scrollLeft successfully changes to 100; no viewport overflow, one real GD20 card.
+  The first screenshot attempt had no card because the model omitted the product name;
+  the final images use a fresh conversation asking for the full name and PIX price.
+- Next: stop for owner review of this local commit. No push or subsequent plan step.

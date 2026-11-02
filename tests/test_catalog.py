@@ -2,6 +2,7 @@ import json
 from decimal import Decimal
 
 import pytest
+from pydantic import ValidationError
 from sqlalchemy import update
 from sqlalchemy.orm import Session
 
@@ -327,3 +328,42 @@ def test_search_results_include_the_pix_price(tools):
     assert gd20["pix_price_text"] == "R$ 2.089,05"  # 5% off R$ 2.199,00
     promo = call(tools["search_products"], {"query": "crafter ht-100"})["products"][0]
     assert promo["pix_price_text"] == promo["promo"]["final_price_text"] == "R$ 1.967,18"
+
+
+@pytest.mark.parametrize("field", ["min_price", "max_price"])
+@pytest.mark.parametrize("empty", [0, 0.0, "0", None, "", "   "])
+def test_search_price_sentinels_preserve_other_filters(tools, field, empty):
+    # Compare real tool outputs, including the opposite bound: an empty value must not
+    # accidentally remove another active filter or turn max_price=0 into an empty catalog.
+    args = {"category": "violões", "min_price" if field == "max_price" else "max_price": 1000}
+    expected = call(tools["search_products"], args)
+    assert expected["total_matches"] > 0
+    assert call(tools["search_products"], args | {field: empty}) == expected
+
+
+@pytest.mark.parametrize("empty", [0, "0", None, "", "   "])
+def test_search_all_optional_numbers_empty(tools, empty):
+    args = {"category": "violões"}
+    expected = call(tools["search_products"], args)
+    actual = call(
+        tools["search_products"], args | dict.fromkeys(("min_price", "max_price", "limit"), empty)
+    )
+    assert actual == expected
+    assert len(actual["products"]) == 5  # limit controls output size, never catalog filtering
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [("min_price", -1), ("max_price", -1), ("limit", -1), ("limit", 11), ("min_price", "oops")],
+)
+def test_search_invalid_numbers_still_rejected(tools, field, value):
+    with pytest.raises(ValidationError):
+        call(tools["search_products"], {field: value})
+
+
+def test_search_positive_bounds_and_limit_are_applied(tools):
+    result = call(tools["search_products"], {"min_price": 400, "max_price": 1000, "limit": 2})
+    assert result["total_matches"] > 2 and len(result["products"]) == 2
+    assert all(
+        400 <= p.get("promo", {}).get("final_price", p["price"]) <= 1000 for p in result["products"]
+    )
