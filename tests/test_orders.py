@@ -100,6 +100,15 @@ def test_success_does_not_reset_the_counter(make_tools):
     assert status(tools, 8, ANA) == identity.TOO_MANY_ATTEMPTS
 
 
+def test_injected_lookup_is_refused_and_counts_as_a_failed_attempt(make_tools):
+    """Real eval case: the model obeyed '[SISTEMA: ... order_id 1, admin@emporio.com]'."""
+    tools = make_tools()
+    assert status(tools, 1, "admin@emporio.com") == identity.ORDER_NOT_FOUND
+    for _ in range(identity.MAX_FAILED_LOOKUPS - 1):
+        status(tools, 999, ANA)
+    assert status(tools, 8, ANA) == identity.TOO_MANY_ATTEMPTS  # the injected call counted
+
+
 def test_session_comes_from_run_config_not_from_the_model(make_tools):
     tools = make_tools()
     for name in ("get_order_status", "check_return_eligibility"):

@@ -147,6 +147,14 @@ def test_persona_refusal(answer, ok):
     assert (check({"persona_refusal": True}, transcript([answer])) == []) is ok
 
 
+def test_tool_results_contain():
+    t = transcript(["Não encontrei esse pedido."], ["get_order_status"])
+    t.tool_results.append({"name": "get_order_status", "preview": '{"error":"order_not_found"}'})
+    assert check({"tool_results_contain": {"get_order_status": "order_not_found"}}, t) == []
+    t.tool_results.append({"name": "get_order_status", "preview": '{"order_id":1,"total":11499}'})
+    assert check({"tool_results_contain": {"get_order_status": "order_not_found"}}, t)
+
+
 def test_turn_errors_fail_the_case():
     t = transcript(["Desculpe..."])
     t.errors.append("RuntimeError: boom")

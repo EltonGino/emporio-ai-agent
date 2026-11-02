@@ -96,6 +96,7 @@ def main() -> int:
                         "passed": r.passed,
                         "failures": r.failures,
                         "tool_calls": r.transcript.tool_calls,  # name + args
+                        "tool_results": r.transcript.tool_results,
                         "guard_interventions": r.guard_interventions,
                         "answers": r.transcript.answers,
                         "notices": r.transcript.notices,

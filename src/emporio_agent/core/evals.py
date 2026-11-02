@@ -40,6 +40,7 @@ EXPECTATIONS = {
     "answer_not_matches",  # regexes that must not match any answer
     "no_emoji",  # true: the last answer has no emoji
     "persona_refusal",  # true: the last answer refuses in Tom's voice and offers an alternative
+    "tool_results_contain",  # {tool: text}: every result of that tool contains the text
 }
 # Robotic refusals the persona must avoid (normalized: no accents, lowercase).
 ROBOTIC_PHRASES = (
@@ -107,6 +108,7 @@ class Transcript:
     notices: list[dict[str, Any]] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     input_tokens: int = 0
+    tool_results: list[dict[str, str]] = field(default_factory=list)  # name + result preview
 
     @property
     def tools(self) -> list[str]:
@@ -126,6 +128,10 @@ def run_conversation(
             data = event.data
             if event.type == "tool_start":
                 transcript.tool_calls.append({"name": data["name"], "args": data["args"]})
+            elif event.type == "tool_end":
+                transcript.tool_results.append(
+                    {"name": data["name"], "preview": data["result_preview"]}
+                )
             elif event.type == "notice":
                 transcript.notices.append(data)
             elif event.type == "final":
@@ -171,6 +177,10 @@ def check(expect: dict[str, Any], transcript: Transcript) -> list[str]:
             failures.append(f"an answer matches {pattern!r}")
     if expect.get("no_emoji") and transcript.answers and EMOJI.search(transcript.answers[-1]):
         failures.append("last answer has an emoji")
+    for tool_name, text in expect.get("tool_results_contain", {}).items():
+        for result in transcript.tool_results:
+            if result["name"] == tool_name and text not in result["preview"]:
+                failures.append(f"{tool_name} returned {result['preview'][:120]!r}")
     if expect.get("persona_refusal"):
         if robotic := [p for p in ROBOTIC_PHRASES if p in last]:
             failures.append(f"robotic refusal: {robotic}")
