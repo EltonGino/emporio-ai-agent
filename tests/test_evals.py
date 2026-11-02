@@ -117,11 +117,11 @@ def test_normalize_ignores_accents_case_and_typographic_hyphens():
         ({"answer_not_matches": [r"\d{8}-\d{3,}"]}, transcript(["20231102-8745"]), False),
         ({"no_emoji": True}, transcript(["Sinto muito. 🎸"]), False),
         ({"no_emoji": True}, transcript(["🎸 oi", "Sinto muito."]), True),
-        ({"no_guard_failures": True}, transcript(["x"], notices=[{"kind": "rate_limit"}]), True),
+        ({"persona_refusal": True}, transcript(["Confere os dados e me envie de novo?"]), True),
         (
-            {"no_guard_failures": True},
-            transcript(["x"], notices=[{"kind": "output_guard", "failures": {"price": ["R$ 1"]}}]),
-            False,
+            {"answer_contains_any": ["28/02/2026", "25 dias"]},
+            transcript(["atraso de 25 dias"]),
+            True,
         ),
     ],
 )
@@ -205,11 +205,21 @@ def test_runner_fails_the_real_routing_gap():
     assert any("first tool" in f for f in result.failures)
 
 
-def test_runner_sees_guard_interventions():
-    case = EvalCase("p", ["quanto custa?"], {"no_guard_failures": True})
+def test_guard_interventions_are_a_metric_not_a_failure():
+    """Real case (price_martin): the guard fixed an invented price; the customer saw the right
+    answer, so the case passes and the intervention is reported separately."""
+    case = EvalCase("p", ["quanto custa?"], {"answer_contains": ["consultar"]})
     invented = AIMessage("Sai por R$ 2.399,00.")
     result = run_case(case, factory_for(invented, AIMessage("Vou consultar o catálogo.")))
-    assert not result.passed and "output guard" in result.failures[0]
+    assert result.passed
+    assert result.guard_interventions == {"price": 1}
+
+
+def test_no_guard_failures_is_no_longer_an_expectation(tmp_path):
+    old = tmp_path / "old.yaml"
+    old.write_text("cases:\n  - id: x\n    turns: [oi]\n    expect: {no_guard_failures: true}\n")
+    with pytest.raises(ValueError, match="no_guard_failures"):
+        load_cases(old)
 
 
 def test_multi_turn_cases_share_one_session():

@@ -55,9 +55,10 @@ def main() -> int:
             status = "PASS" if result.passed else "FAIL"
             t = result.transcript
             limits = sum(n.get("kind") == "rate_limit" for n in t.notices)
+            guard = result.guard_interventions
             print(
                 f"{status}  {case.id:<42} tokens_in={t.input_tokens:<6} 429s={limits} "
-                f"tools={t.tools}",
+                f"guard={guard or '-'} tools={t.tools}",
                 flush=True,
             )
             for failure in result.failures:
@@ -75,6 +76,11 @@ def main() -> int:
         f"input tokens: {total_tokens} over {turns} turns (≈ {total_tokens // max(turns, 1)}/turn)"
     )
     print(f"rate-limit notices (429): {limits}")
+    guard_totals: dict[str, int] = {}
+    for r in results:
+        for check_name, count in r.guard_interventions.items():
+            guard_totals[check_name] = guard_totals.get(check_name, 0) + count
+    print(f"output guard interventions (metric, not pass/fail): {guard_totals or 'none'}")
     REPORTS.mkdir(parents=True, exist_ok=True)
     report = REPORTS / f"report-{datetime.now():%Y%m%d-%H%M%S}.json"
     report.write_text(
@@ -83,12 +89,14 @@ def main() -> int:
                 "model": model,
                 "passed": passed,
                 "total": len(results),
+                "guard_interventions": guard_totals,
                 "cases": [
                     {
                         "id": r.case.id,
                         "passed": r.passed,
                         "failures": r.failures,
-                        "tools": r.transcript.tools,
+                        "tool_calls": r.transcript.tool_calls,  # name + args
+                        "guard_interventions": r.guard_interventions,
                         "answers": r.transcript.answers,
                         "notices": r.transcript.notices,
                         "input_tokens": r.transcript.input_tokens,

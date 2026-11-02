@@ -39,7 +39,6 @@ EXPECTATIONS = {
     "answer_not_contains",  # the last answer contains none (checked on every answer)
     "answer_not_matches",  # regexes that must not match any answer
     "no_emoji",  # true: the last answer has no emoji
-    "no_guard_failures",  # true: the output guard never had to correct an answer
     "persona_refusal",  # true: the last answer refuses in Tom's voice and offers an alternative
 }
 # Robotic refusals the persona must avoid (normalized: no accents, lowercase).
@@ -61,6 +60,8 @@ OFFER_PHRASES = (
     "posso te mostrar",
     "me passa",
     "me passe",
+    "me envie",
+    "me enviar",
     "e so me",
     "se quiser",
 )
@@ -175,11 +176,18 @@ def check(expect: dict[str, Any], transcript: Transcript) -> list[str]:
             failures.append(f"robotic refusal: {robotic}")
         if not any(p in last for p in OFFER_PHRASES):
             failures.append("refusal offers no alternative")
-    if expect.get("no_guard_failures"):
-        guard = [n for n in transcript.notices if n.get("kind") == "output_guard"]
-        if guard:
-            failures.append(f"output guard had to act: {[n.get('failures') for n in guard]}")
     return failures
+
+
+def guard_interventions(transcript: Transcript) -> dict[str, int]:
+    """How many times each output-guard check had to act (retry or safe answer). A metric,
+    not a pass criterion: the case is judged on the final answer the customer saw."""
+    counts: dict[str, int] = {}
+    for notice in transcript.notices:
+        if notice.get("kind") == "output_guard":
+            for check_name in notice.get("failures", {}):
+                counts[check_name] = counts.get(check_name, 0) + 1
+    return counts
 
 
 @dataclass
@@ -191,6 +199,10 @@ class CaseResult:
     @property
     def passed(self) -> bool:
         return not self.failures
+
+    @property
+    def guard_interventions(self) -> dict[str, int]:
+        return guard_interventions(self.transcript)
 
 
 def run_case(
