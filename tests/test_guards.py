@@ -142,3 +142,89 @@ ROBOTIC = PhraseCheck(phrases=ROBOTIC_PHRASES, correction_note=lambda p: "", saf
 )
 def test_robotic_phrases(answer, found):
     assert len(ROBOTIC.problems(answer, [])) == found
+
+
+# --- payment answers need a payment tool ---------------------------------------------------
+
+from emporio_agent.client.assistant import (  # noqa: E402
+    PAYMENT_DETAIL_PATTERNS,
+    PAYMENT_DETAIL_WORDS,
+    PAYMENT_TOOLS,
+    PAYMENT_TOPIC_WORDS,
+    PIX_DETAIL_WORDS,
+    PIX_EVIDENCE_FIELDS,
+    price_correction_note,
+)
+from emporio_agent.core.guards import TopicToolCheck  # noqa: E402
+
+PAYMENT = TopicToolCheck(
+    topic_words=PAYMENT_TOPIC_WORDS,
+    detail_words=PAYMENT_DETAIL_WORDS,
+    detail_patterns=PAYMENT_DETAIL_PATTERNS,
+    amounts_are_details=False,
+    tools=PAYMENT_TOOLS,
+    correction_note=lambda p: "",
+    safe_answer="s",
+    name="payment_tool",
+)
+PIX = TopicToolCheck(
+    topic_words=("pix",),
+    detail_words=PIX_DETAIL_WORDS,
+    tools=PAYMENT_TOOLS,
+    evidence_fields=PIX_EVIDENCE_FIELDS,
+    correction_note=lambda p: "",
+    safe_answer="s",
+    name="pix_value",
+)
+GD20 = '{"products":[{"id":95,"price":2199.0,"pix_price":2089.05,"pix_price_text":"R$ 2.089,05"}]}'
+
+
+def tool_result(name: str, content: str = "{}") -> ToolMessage:
+    return ToolMessage(content, tool_call_id="1", name=name)
+
+
+SEARCH = tool_result("search_products", GD20)
+
+
+def flagged(answer: str, *results: ToolMessage) -> bool:
+    history = [HumanMessage("pergunta"), *results]
+    return bool(PAYMENT.problems(answer, history) | PIX.problems(answer, history))
+
+
+@pytest.mark.parametrize(
+    ("answer", "results", "expected"),
+    [
+        # Real smoke-test answer (Ollama gpt-oss:20b): a wrong rule after only a product search.
+        (
+            "O GD20 sai por R$ 2.199,00. Se preferir pagar via PIX, o valor permanece o mesmo.",
+            [SEARCH],
+            True,
+        ),
+        # Real Ollama retest answers: right PIX value from the search, offer about installments.
+        (
+            "O Takamine GD20 sai por **R$ 2.089,05 no PIX** (preço original R$ 2.199,00).",
+            [SEARCH],
+            False,
+        ),
+        (
+            "O GD20 custa **R$ 2.089,05** no PIX. Se quiser saber mais sobre pagamento ou "
+            "parcelamento, é só falar!",
+            [SEARCH],
+            False,
+        ),
+        ("No PIX tem 5% de desconto.", [], True),
+        ("Dá pra parcelar em até 12x de R$ 183,25.", [SEARCH], True),  # installments need calc
+        ("Em até 12x de R$ 183,25.", [tool_result("calculate_payment_options")], False),
+        ("No boleto compensa em até 3 dias úteis.", [SEARCH], True),
+        ("O desconto do PIX não vale em promoção.", [tool_result("search_policies")], False),
+        ("Posso te ajudar com formas de pagamento também!", [], False),  # no figures/rules
+        ("O GD20 sai por R$ 2.199,00.", [SEARCH], False),  # not about payment
+    ],
+)
+def test_payment_answers_need_a_payment_tool_or_the_tools_pix_value(answer, results, expected):
+    assert flagged(answer, *results) is expected
+
+
+def test_price_correction_points_to_the_right_tool():
+    note = price_correction_note({"R$ 2.089,05"})
+    assert "calculate_payment_options" in note and "get_product_details" in note

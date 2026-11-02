@@ -21,7 +21,13 @@ from emporio_agent.client.tools import br_datetime, build_tools
 from emporio_agent.clock import Clock, get_clock
 from emporio_agent.config import ClientConfig, Settings
 from emporio_agent.core.agent import build_agent, is_invalid_tool_call, is_local_invalid_tool_call
-from emporio_agent.core.guards import OutputGuard, PhraseCheck, PriceCheck, ProtocolCheck
+from emporio_agent.core.guards import (
+    OutputGuard,
+    PhraseCheck,
+    PriceCheck,
+    ProtocolCheck,
+    TopicToolCheck,
+)
 from emporio_agent.core.retrieval.base import Retriever
 
 GROQ_FALLBACK_RETRIES = 0  # a 429 moves on to the next model at once
@@ -73,10 +79,55 @@ def price_correction_note(invalid: set[str]) -> str:
     amounts = ", ".join(sorted(invalid))
     return (
         "## Correção obrigatória (valores)\n"
-        f"Sua resposta anterior citou {amounts}, que não aparece nos resultados das "
-        "ferramentas desta mensagem. Responda de novo citando só valores devolvidos pelas "
-        "ferramentas neste turno (consulte de novo se precisar), sem calcular nem inventar "
-        "produtos ou preços."
+        f"Sua resposta anterior citou {amounts}, que não veio de nenhuma ferramenta neste "
+        "turno. Consulte agora a ferramenta que fornece esse dado: calculate_payment_options "
+        "para PIX, parcelas e totais; search_products ou get_product_details para o preço de "
+        "um produto. Depois responda só com os valores que ela devolver, sem calcular."
+    )
+
+
+# Payment answers need a payment tool in the turn (smoke test: "no PIX o valor permanece o
+# mesmo" after only search_products). search_policies covers general rules without a product.
+# Installments/boleto/card: only claims about conditions count ("12x", "sem juros"), not prices
+# elsewhere in the answer (an offer "quer saber do parcelamento?" isn't a claim).
+PAYMENT_TOPIC_WORDS = (
+    "parcel",
+    "boleto",
+    "cartão de crédito",
+    "cartão de débito",
+    "forma de pagamento",
+    "formas de pagamento",
+    "pagamento combinado",
+)
+PAYMENT_DETAIL_WORDS = ("juros", "vezes", "à vista", "compensa", "mínim", "dias úteis", "%")
+PAYMENT_DETAIL_PATTERNS = (r"\b\d{1,2} ?x\b",)  # "12x", "3 x"
+PAYMENT_TOOLS = ("calculate_payment_options", "get_product_details", "search_policies")
+# PIX: a product search returns pix_price, so citing that exact amount is accepted too.
+PIX_DETAIL_WORDS = ("desconto", "%")
+PIX_EVIDENCE_FIELDS = ("pix_price", "pix_total")
+SAFE_PAYMENT_ANSWER = (
+    "Pra te passar as condições de pagamento certinhas, me diz qual instrumento você quer "
+    "que eu calculo o PIX e as parcelas pra você 😊"
+)
+
+
+def payment_correction_note(_: set[str]) -> str:
+    return (
+        "## Correção obrigatória (pagamento)\n"
+        "Sua resposta anterior fala de parcelas ou formas de pagamento sem ter consultado a "
+        "ferramenta certa neste turno. Chame agora calculate_payment_options com o produto (ou "
+        "o carrinho) para parcelas e totais — ou search_policies para uma regra geral — e "
+        "responda com o que ela devolver."
+    )
+
+
+def pix_correction_note(_: set[str]) -> str:
+    return (
+        "## Correção obrigatória (PIX)\n"
+        "Sua resposta anterior fala do PIX sem o valor de PIX devolvido pelas ferramentas. Use "
+        "o pix_price_text do resultado de search_products (já segue a regra: sem desconto de "
+        "PIX sobre preço promocional) ou chame calculate_payment_options, e responda com esse "
+        "valor."
     )
 
 
@@ -90,6 +141,25 @@ def output_guard() -> OutputGuard:
                 safe_answer=SAFE_PROTOCOL_ANSWER,
             ),
             PriceCheck(correction_note=price_correction_note, safe_answer=SAFE_PRICE_ANSWER),
+            TopicToolCheck(
+                topic_words=PAYMENT_TOPIC_WORDS,
+                detail_words=PAYMENT_DETAIL_WORDS,
+                detail_patterns=PAYMENT_DETAIL_PATTERNS,
+                amounts_are_details=False,
+                tools=PAYMENT_TOOLS,
+                correction_note=payment_correction_note,
+                safe_answer=SAFE_PAYMENT_ANSWER,
+                name="payment_tool",
+            ),
+            TopicToolCheck(
+                topic_words=("pix",),
+                detail_words=PIX_DETAIL_WORDS,
+                tools=PAYMENT_TOOLS,
+                evidence_fields=PIX_EVIDENCE_FIELDS,
+                correction_note=pix_correction_note,
+                safe_answer=SAFE_PAYMENT_ANSWER,
+                name="pix_value",
+            ),
             PhraseCheck(
                 phrases=ROBOTIC_PHRASES,
                 correction_note=phrase_correction_note,

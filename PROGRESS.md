@@ -40,7 +40,7 @@ the video, then the 4 quota-cut eval cases / a full eval run if quota is left.
 | 14 | CLI with debug mode | done | `feat(cli): interactive CLI with debug mode` (f8ea8e2); `fix(agent): price guard, alternatives, verified-order handoffs and promotions` (2e40cf1) |
 | 15 | Routing + adversarial evals | prepared (not run) | `test: routing and adversarial eval cases and runner` (f544c30) |
 | 16 | CI workflow | done (not yet run on GitHub) | `ci: lint and tests workflow` (af62cb5) |
-| 17 | FastAPI (SSE, sessions, rate limit, retention, deletion) | done | `feat(api): FastAPI with SSE, sessions, rate limit, retention and deletion` (a16d38a); `feat(api): per-IP limits and identity lockout behind trusted proxies` (8113004); `feat(agent): Ollama as a local development provider` |
+| 17 | FastAPI (SSE, sessions, rate limit, retention, deletion) | done | `feat(api): FastAPI with SSE, sessions, rate limit, retention and deletion` (a16d38a); `feat(api): per-IP limits and identity lockout behind trusted proxies` (8113004); `feat(agent): Ollama as a local development provider` (3da0c20); `fix(agent): constructive payment corrections and PIX price in search results` |
 | 18 | Frontend scaffold | done | `feat(frontend): Vite React scaffold` (d8dbbdc) |
 | 19 | Chat UI with streaming | done (mock API; real API in step 17) | `feat(frontend): customer service chat with streaming` (4ae5145) |
 | 20 | Bastidores panel + simulated date banner | done (mock API) | `feat(frontend): demo-mode behind-the-scenes panel and simulated date banner` (1979f10); `fix(agent): refusals in Tom's voice` (3515048); `fix(agent): refusal examples, phrase guard, optional order data, injection rule` (30f7830); `test: eval reports tool args and guard interventions as a metric` (eb89dce); `test: injected-instruction criterion and pending eval re-runs` (d67afd5) |
@@ -1011,6 +1011,33 @@ the video, then the 4 quota-cut eval cases / a full eval run if quota is left.
   2 calls, 5,427 input tokens, 0.9 s. Finding to discuss: the guard stops unverified numbers
   but not a wrong rule stated in words; the model skipped `calculate_payment_options` for a
   PIX question.
+- **PIX fix after the Ollama smoke test (owner, 2026-11-02):** (1) **constructive
+  corrections**: the price check's note now names the tool to call (calculate_payment_options
+  for PIX/installments/totals; search_products/get_product_details for a product's price)
+  instead of only forbidding the amount. (2) **Payment answers need evidence**
+  (`TopicToolCheck`, core, generic): answers about installments/boleto/card/payment methods
+  that state **conditions** ("12x", "sem juros", "vezes", "parcela mínima", "dias úteis", "%")
+  need `calculate_payment_options`, `get_product_details` or `search_policies` in the turn
+  (search_policies added to the owner's list: general rules without a product, e.g. "PIX tem
+  desconto em promoção?", come from the manual); prices elsewhere in the answer don't count
+  as an installment claim (a correct PIX answer ending "quer saber do parcelamento?" was held
+  back otherwise). Answers about **PIX** with an amount or "desconto"/"%" need one of those
+  tools **or must cite an amount a tool returned as `pix_price`/`pix_total`** — so the original
+  wrong answer ("R$ 2.199,00 … no PIX o valor permanece o mesmo") is still held (it cites the
+  list price, not the PIX price), while "R$ 2.089,05 no PIX" from a product search passes.
+  (3) `search_products`, its alternatives and `list_active_promotions` return
+  `pix_price`/`pix_price_text` (§6.2 applied: a promotional item's PIX price = its final
+  price). Output-guard notices now also carry `discarded_text` (300 chars; demo panel and
+  trace only, never customers) — it showed the held-back answers were right in a retest.
+- **README (owner, 2026-11-02):** a verification that only **forbids** can push the model to an
+  evasive or wrong answer (live: after "don't cite that amount", the 20b said "no PIX o valor
+  permanece o mesmo", which is false); the correction must point to the right action (which
+  tool to call) and, where possible, accept the tool's own value as evidence.
+- **PIX retest on Ollama gpt-oss:20b (2026-11-02):** twice, "O Takamine GD20 sai por
+  R$ 2.089,05 no PIX (preço original R$ 2.199,00)" — search_products only, no guard
+  intervention, 2 calls, ≈ 5,100 input tokens, ≈ 1 s. (A first retest round still failed: a
+  script error had left the old check in place; it was re-applied and verified.) Minor: one
+  answer added "6 cordas de aço" (specs only say steel strings).
 - **Convention** — The "Commit" column holds the commit subject; hashes are in `git log`
   (a commit cannot contain its own hash).
 
@@ -1441,3 +1468,10 @@ the video, then the 4 quota-cut eval cases / a full eval run if quota is left.
   `pyproject.toml`, `uv.lock`, `PROGRESS.md`.
 - Deps: langchain-ollama 1.1.0 (+ ollama 0.6.3).
 - Tests: ruff ok, format ok, `pytest -m "not llm"` 396 passed.
+
+### 2026-11-02 16:30 — Constructive payment corrections, PIX price in search results (owner)
+- Done: constructive price note; `TopicToolCheck` (installments claims; PIX with tool
+  evidence); `pix_price_text` in product results; `discarded_text` in guard notices.
+- Files: `src/emporio_agent/core/guards.py`, `src/emporio_agent/client/{assistant,tools}.py`,
+  `tests/test_{guards,agent,catalog}.py`, `PROGRESS.md`.
+- Tests: ruff ok, format ok, `pytest -m "not llm"` 409 passed. PIX retest on Ollama: right.

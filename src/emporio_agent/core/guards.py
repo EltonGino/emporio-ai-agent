@@ -9,7 +9,12 @@ emitted (see PROGRESS.md: streaming).
   (models invented "Protocolo: 20231102-8745" without opening a case).
 - PriceCheck: every money amount must appear in this turn's tool results or in what the
   customer wrote (a model invented basses "por R$ 2.399,00" after an empty search).
+- TopicToolCheck: an answer about a topic, with figures or rules, needs one of that topic's
+  tools in this turn (a model said "no PIX o valor permanece o mesmo" without the payment tool).
 - PhraseCheck: forbidden phrases (e.g. robotic refusals that break the persona).
+
+Corrections must point to the right action (which tool to call), not only forbid: a check
+that only forbids can push the model to an evasive or wrong answer.
 """
 
 from __future__ import annotations
@@ -29,6 +34,7 @@ from unidecode import unidecode
 from emporio_agent.core.events import notify
 
 logger = logging.getLogger(__name__)
+DISCARDED_PREVIEW_CHARS = 300
 
 
 class Check(Protocol):
@@ -169,6 +175,77 @@ class PriceCheck:
         return self.correction_note(problems)
 
 
+# --- topics that need a tool ---------------------------------------------------------------
+
+
+def _normalized(text: str) -> str:
+    return " ".join(unidecode(text).casefold().split())
+
+
+def field_amounts(messages: Iterable[AnyMessage], fields: Sequence[str]) -> set[Decimal]:
+    """Values of the given JSON keys (at any depth) in these tool results, as amounts."""
+    found: set[Decimal] = set()
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key in fields and (amount := parse_amount(str(value))) is not None:
+                    found.add(amount)
+                walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    for message in messages:
+        if isinstance(message, ToolMessage):
+            try:
+                walk(json.loads(message.text))
+            except ValueError:
+                continue
+    return found
+
+
+@dataclass
+class TopicToolCheck:
+    """If the answer talks about `topic_words` with details — money amounts (when
+    `amounts_are_details`), `detail_words` or `detail_patterns` — one of `tools` must have run
+    in this turn, or the answer must cite an amount a tool returned in one of
+    `evidence_fields` (e.g. `pix_price` in a product search result)."""
+
+    topic_words: Sequence[str]
+    detail_words: Sequence[str]
+    tools: Sequence[str]
+    correction_note: Callable[[set[str]], str]
+    safe_answer: str
+    name: str = "topic"
+    evidence_fields: Sequence[str] = ()
+    detail_patterns: Sequence[str] = ()  # regexes over the normalized text
+    amounts_are_details: bool = True  # False: a price elsewhere in the answer isn't a claim
+
+    def problems(self, answer: str, history: Sequence[AnyMessage]) -> set[str]:
+        text = _normalized(answer)
+        if not any(_normalized(w) in text for w in self.topic_words):
+            return set()
+        cited = set(cited_amounts(answer))
+        details = (
+            (self.amounts_are_details and bool(cited))
+            or any(_normalized(w) in text for w in self.detail_words)
+            or any(re.search(p, text) for p in self.detail_patterns)
+        )
+        if not details:
+            return set()  # mentions the topic without figures or rules (e.g. an offer)
+        turn = current_turn(history)
+        called = {m.name for m in turn if isinstance(m, ToolMessage)}
+        if called & set(self.tools):
+            return set()
+        if self.evidence_fields and cited & field_amounts(turn, self.evidence_fields):
+            return set()
+        return {self.name}
+
+    def correction(self, problems: set[str]) -> str:
+        return self.correction_note(problems)
+
+
 # --- forbidden phrases ---------------------------------------------------------------------
 
 
@@ -219,6 +296,8 @@ class OutputGuard(AgentMiddleware):
             "output_guard",
             action="retry",
             failures={name: sorted(p) for name, p in failures.items()},
+            # Internal (demo panel / trace only): what the customer was kept from seeing.
+            discarded_text=discarded.text[:DISCARDED_PREVIEW_CHARS],
             discarded_usage=discarded.usage_metadata,
             model=discarded.response_metadata.get("model_name"),
         )
@@ -236,6 +315,7 @@ class OutputGuard(AgentMiddleware):
             "output_guard",
             action="safe_answer",
             failures={name: sorted(p) for name, p in failures.items()},
+            discarded_text=answer.text[:DISCARDED_PREVIEW_CHARS],
             discarded_usage=answer.usage_metadata,
             model=answer.response_metadata.get("model_name"),
         )

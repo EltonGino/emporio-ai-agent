@@ -320,3 +320,10 @@ def test_search_tool_returns_alternatives(tools):
     assert result["products"] == [] and result["unavailable"][0]["availability"] == "descontinuado"
     assert {p["category"] for p in result["alternatives"]} == {"Baixos"}
     assert all("price_text" in p for p in result["alternatives"])
+
+
+def test_search_results_include_the_pix_price(tools):
+    gd20 = call(tools["search_products"], {"query": "takamine gd20"})["products"][0]
+    assert gd20["pix_price_text"] == "R$ 2.089,05"  # 5% off R$ 2.199,00
+    promo = call(tools["search_products"], {"query": "crafter ht-100"})["products"][0]
+    assert promo["pix_price_text"] == promo["promo"]["final_price_text"] == "R$ 1.967,18"

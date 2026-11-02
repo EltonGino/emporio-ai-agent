@@ -39,7 +39,7 @@ from emporio_agent.client.rules import (
     to_cents,
 )
 from emporio_agent.clock import Clock
-from emporio_agent.config import WEEKDAYS, ClientConfig, ReturnReason
+from emporio_agent.config import WEEKDAYS, ClientConfig, PaymentsConfig, ReturnReason
 from emporio_agent.core.retrieval.base import Retriever
 
 ORDER_STATUS_TEXT = {
@@ -81,7 +81,11 @@ def money(key: str, value: Decimal) -> dict[str, Any]:
     return {key: float(value), f"{key}_text": format_brl(value)}
 
 
-def product_summary(product: ProductInfo, specs: dict[str, Any] | None = None) -> dict[str, Any]:
+def product_summary(
+    product: ProductInfo,
+    specs: dict[str, Any] | None = None,
+    payments: PaymentsConfig | None = None,
+) -> dict[str, Any]:
     data: dict[str, Any] = {
         "id": product.id,
         "name": product.name,
@@ -95,6 +99,9 @@ def product_summary(product: ProductInfo, specs: dict[str, Any] | None = None) -
             "percent": product.promotion.percent,
             **money("final_price", product.final_price),
         }
+    if payments is not None:  # §6.2 applied here: no PIX discount on a promotional price
+        promotional = product.promotion is not None
+        data |= money("pix_price", pix_price(product.final_price, promotional, payments))
     if specs is None:
         keys = [k for k in KEY_SPECS if k in product.specs][:MAX_KEY_SPECS]
         specs = {k: product.specs[k] for k in keys}
@@ -252,6 +259,8 @@ def build_tools(
         disponivel | esgotado | descontinuado | em_breve (not for sale yet). unavailable =
         exact matches not for sale now; offer only the returned alternatives. partial_match =
         exact item not in the catalog (unmatched_terms); results are only similar.
+        pix_price_text already follows the rules (no PIX discount on promotional prices);
+        installments need calculate_payment_options.
         possible_accessory_query = asks for an accessory the store doesn't sell."""
         filters = ProductFilters(
             query=query,
@@ -271,7 +280,7 @@ def build_tools(
             return to_json({"error": "unknown_category", "categories": exc.known, **accessory})
         result: dict[str, Any] = {
             "total_matches": len(found.products),
-            "products": [product_summary(p) for p in found.products[:limit]],
+            "products": [product_summary(p, payments=payments) for p in found.products[:limit]],
         }
         if found.partial_match:
             result["partial_match"] = True
@@ -282,7 +291,9 @@ def build_tools(
                 for p in found.unavailable
             ]
         if found.alternatives:
-            result["alternatives"] = [product_summary(p) for p in found.alternatives]
+            result["alternatives"] = [
+                product_summary(p, payments=payments) for p in found.alternatives
+            ]
         return to_json(result | accessory)
 
     @tool(args_schema=ProductIdArgs)
@@ -309,7 +320,8 @@ def build_tools(
         """All promotions active now, any category. Use for any promotion/discount question
         before saying what is or isn't on sale. Any other (e.g. a past Black Friday) is not
         active."""
-        return to_json({"promotions": [product_summary(p) for p in repo.list_active_promotions()]})
+        promotions = repo.list_active_promotions()
+        return to_json({"promotions": [product_summary(p, payments=payments) for p in promotions]})
 
     @tool(args_schema=PaymentArgs)
     def calculate_payment_options(items: list[CartItem]) -> str:

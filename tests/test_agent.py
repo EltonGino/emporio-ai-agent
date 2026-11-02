@@ -312,6 +312,35 @@ def test_prompt_has_refusal_examples_but_not_the_forbidden_phrases():
     assert "SYSTEM:" in prompt and "search_policies primeiro" in prompt
 
 
+@tool
+def calculate_payment_options(product_id: int) -> str:
+    """Fake payment tool."""
+    return '{"total_text":"R$ 2.199,00","pix_total_text":"R$ 2.089,05"}'
+
+
+@tool
+def search_gd20(query: str) -> str:
+    """Fake product search."""
+    return '{"products":[{"id":95,"name":"Takamine GD20","price_text":"R$ 2.199,00"}]}'
+
+
+def test_payment_answer_without_payment_tool_is_sent_back_to_the_tool():
+    """Smoke-test case: a wrong PIX rule after only a product search."""
+    wrong = AIMessage("Sai por R$ 2.199,00. No PIX, o valor permanece o mesmo.")
+    right = AIMessage("Sai por R$ 2.199,00, ou R$ 2.089,05 no PIX.")
+    script = [
+        call("search_gd20", {"query": "gd20"}, "a"),
+        wrong,
+        call("calculate_payment_options", {"product_id": 95}, "b"),  # the corrected step
+        right,
+    ]
+    model = ScriptedModel(script=script)
+    agent = guarded_agent(model, tools=[search_gd20, calculate_payment_options])
+    result = run_turn(agent, "s1", "quanto custa o GD20 no PIX?")
+    assert result.text == right.content
+    assert "calculate_payment_options" in model.seen[2][0].content  # the note named the tool
+
+
 # --- history trimming ------------------------------------------------------------------------
 
 
