@@ -13,7 +13,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Protocol
 
-from sqlalchemy import Engine, func, select
+from sqlalchemy import Engine, delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
@@ -26,6 +26,7 @@ from emporio_agent.client.db.models import (
     OrderItem,
     Product,
     Promotion,
+    SessionVerifiedOrder,
 )
 from emporio_agent.client.rules import apply_discount, availability
 
@@ -156,6 +157,12 @@ class StoreRepository(Protocol):
     ) -> HandoffResult:
         """Register a request for the human team (protocol EMP-YYYYMMDD-NNNN). Idempotent per
         session + reason + order: the same case twice returns the open protocol."""
+        ...
+
+    def forget_session(self, session_id: str) -> int:
+        """LGPD deletion: anonymize the session's handoffs (keep protocol, reason, date and
+        status as the operational record) and drop its verified orders. Returns how many
+        handoffs were anonymized."""
         ...
 
 
@@ -382,3 +389,15 @@ class SqlStoreRepository:
             except IntegrityError:
                 continue  # another handoff took this number: count again
         raise RuntimeError("could not allocate a handoff protocol")
+
+    def forget_session(self, session_id: str) -> int:
+        with Session(self._engine) as session, session.begin():
+            anonymized = session.execute(
+                update(Handoff)
+                .where(Handoff.session_id == session_id)
+                .values(contact=None, summary=None, session_id=None)
+            ).rowcount
+            session.execute(
+                delete(SessionVerifiedOrder).where(SessionVerifiedOrder.session_id == session_id)
+            )
+        return anonymized

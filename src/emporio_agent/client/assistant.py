@@ -14,6 +14,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from emporio_agent.client.db.engine import make_engine
 from emporio_agent.client.db.loader import ensure_store_data
+from emporio_agent.client.identity import FailedLookupStore, VerifiedOrderStore
 from emporio_agent.client.repository import SqlStoreRepository
 from emporio_agent.client.rules import HolidayCalendar, store_status
 from emporio_agent.client.tools import br_datetime, build_tools
@@ -165,10 +166,21 @@ def build_store_agent(
     clock: Clock,
     retriever: Retriever,
     checkpointer: BaseCheckpointSaver,
+    failed_lookups: FailedLookupStore | None = None,
+    verified_orders: VerifiedOrderStore | None = None,
 ):
+    """The store agent. Identity state defaults to in-memory (CLI, tests); the API passes the
+    database-backed versions (`SqlFailedLookups`, `SqlVerifiedOrders`)."""
     engine = make_engine(settings.database_url)
     ensure_store_data(engine)
-    tools = build_tools(SqlStoreRepository(engine), client, clock, retriever)
+    tools = build_tools(
+        SqlStoreRepository(engine),
+        client,
+        clock,
+        retriever,
+        failed_lookups=failed_lookups,
+        verified_orders=verified_orders,
+    )
     return build_agent(
         model_chain(settings),
         tools,

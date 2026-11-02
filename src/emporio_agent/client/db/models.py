@@ -131,9 +131,19 @@ class Handoff(Base):
     session_id: Mapped[str | None] = mapped_column(index=True)
     reason: Mapped[str] = mapped_column(String(20))
     order_id: Mapped[int | None]  # plain number, no FK (runtime table)
-    summary: Mapped[str]
+    summary: Mapped[str | None]  # NULL once anonymized (session deletion, LGPD)
     contact: Mapped[str | None]  # only if the customer offered it
     status: Mapped[str] = mapped_column(String(20), default="open")
+
+
+class SessionVerifiedOrder(Base):
+    """Runtime table: orders verified (number + email) in a session; order-related handoffs
+    need one. Kept in the DB so API replicas share it. No foreign keys to store tables."""
+
+    __tablename__ = "session_verified_orders"
+
+    session_id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    order_id: Mapped[int] = mapped_column(primary_key=True)
 
 
 # Rebuilt from data/raw by the loader. Runtime tables (handoffs, sessions) are kept.

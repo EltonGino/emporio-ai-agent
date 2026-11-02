@@ -231,9 +231,16 @@ class TrimHistory(AgentMiddleware):
         return await handler(self._trimmed(request))
 
 
+CHECKPOINT_PRAGMAS = ("PRAGMA journal_mode = WAL", "PRAGMA busy_timeout = 5000")
+
+
 def sqlite_checkpointer(path: Path) -> SqliteSaver:
+    """Sync checkpointer (CLI). The API uses the async one (`api.main`), same pragmas."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    return SqliteSaver(sqlite3.connect(path, check_same_thread=False))
+    conn = sqlite3.connect(path, check_same_thread=False)
+    for pragma in CHECKPOINT_PRAGMAS:
+        conn.execute(pragma)
+    return SqliteSaver(conn)
 
 
 def build_agent(

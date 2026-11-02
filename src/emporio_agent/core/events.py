@@ -13,7 +13,7 @@ import contextlib
 import logging
 import re
 import time
-from collections.abc import Iterator, Sequence
+from collections.abc import AsyncIterator, Iterator, Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -74,6 +74,91 @@ class TurnUsage:
         self.add_usage(message.usage_metadata, message.response_metadata.get("model_name"))
 
 
+class _Turn:
+    """Turns raw `agent.stream` chunks into AgentEvents (shared by the sync and async
+    streams)."""
+
+    def __init__(self, session_id: str, text: str, retrieval_tools: Sequence[str]) -> None:
+        self.session_id = session_id
+        self.text = text
+        self.retrieval_tools = retrieval_tools
+        self.started = time.monotonic()
+        self.pending: dict[str, tuple[str, float]] = {}  # tool_call_id → (name, start)
+        self.usage = TurnUsage()
+        self.answer = ""
+
+    def event(self, type_: EventType, **data: Any) -> AgentEvent:
+        return AgentEvent(type=type_, session_id=self.session_id, data=data)
+
+    @property
+    def input(self) -> dict[str, Any]:
+        return {"messages": [HumanMessage(self.text)]}
+
+    @property
+    def config(self) -> dict[str, Any]:
+        return {"configurable": {"thread_id": self.session_id}}
+
+    def chunk(self, mode: str, chunk: Any) -> list[AgentEvent]:
+        if mode == "custom":
+            notice = dict(chunk)
+            if "discarded_usage" in notice:
+                self.usage.add_usage(notice["discarded_usage"], notice.get("model"))
+            return [self.event("notice", **notice)]
+        events = []
+        for update in chunk.values():
+            messages = update.get("messages", []) if isinstance(update, dict) else []
+            for message in messages:
+                if isinstance(message, AIMessage):
+                    self.usage.add(message)
+                    for call in message.tool_calls:
+                        self.pending[call["id"]] = (call["name"], time.monotonic())
+                        events.append(
+                            self.event("tool_start", name=call["name"], args=call["args"])
+                        )
+                    if not message.tool_calls:
+                        self.answer = message.text  # content only, never reasoning
+                elif isinstance(message, ToolMessage):
+                    events.extend(self._tool_end(message))
+        return events
+
+    def _tool_end(self, message: ToolMessage) -> list[AgentEvent]:
+        name, start = self.pending.pop(message.tool_call_id, (message.name, None))
+        events = [
+            self.event(
+                "tool_end",
+                name=name,
+                result_preview=message.text[:RESULT_PREVIEW_CHARS],
+                duration_ms=_ms_since(start),
+                status=message.status,
+            )
+        ]
+        if name in self.retrieval_tools and message.artifact:
+            events.append(self.event("retrieval", chunks=message.artifact))
+        elif message.artifact:
+            events.append(
+                self.event("notice", kind="tool_artifact", name=name, artifact=message.artifact)
+            )
+        return events
+
+    def error(self, exc: Exception) -> AgentEvent:
+        # The customer gets a friendly message; the trace gets the details.
+        logger.exception("turn failed for session %s", self.session_id)
+        return self.event("error", message=ERROR_MESSAGE, detail=f"{type(exc).__name__}: {exc}")
+
+    def finish(self) -> list[AgentEvent]:
+        tokens = [self.event("token", text=piece) for piece in TOKEN_CHUNK.findall(self.answer)]
+        final = self.event(
+            "final",
+            text=self.answer,
+            usage=asdict(self.usage),
+            duration_ms=_ms_since(self.started),
+        )
+        return [*tokens, final]
+
+
+STREAM_MODES = ["updates", "custom"]
+
+
 def stream_turn(
     agent,
     session_id: str,
@@ -81,59 +166,36 @@ def stream_turn(
     retrieval_tools: Sequence[str] = ("search_policies",),
 ) -> Iterator[AgentEvent]:
     """Run one customer message through the agent and yield its events, in order."""
-
-    def event(type_: EventType, **data: Any) -> AgentEvent:
-        return AgentEvent(type=type_, session_id=session_id, data=data)
-
-    yield event("user_message", text=text)
-    config = {"configurable": {"thread_id": session_id}}
-    started = time.monotonic()
-    pending: dict[str, tuple[str, float]] = {}  # tool_call_id → (name, start)
-    usage, answer = TurnUsage(), ""
+    turn = _Turn(session_id, text, retrieval_tools)
+    yield turn.event("user_message", text=text)
     try:
-        stream = agent.stream(
-            {"messages": [HumanMessage(text)]}, config, stream_mode=["updates", "custom"]
-        )
-        for mode, chunk in stream:
-            if mode == "custom":
-                notice = dict(chunk)
-                if "discarded_usage" in notice:
-                    usage.add_usage(notice["discarded_usage"], notice.get("model"))
-                yield event("notice", **notice)
-                continue
-            for update in chunk.values():
-                messages = update.get("messages", []) if isinstance(update, dict) else []
-                for message in messages:
-                    if isinstance(message, AIMessage):
-                        usage.add(message)
-                        for call in message.tool_calls:
-                            pending[call["id"]] = (call["name"], time.monotonic())
-                            yield event("tool_start", name=call["name"], args=call["args"])
-                        if not message.tool_calls:
-                            answer = message.text  # content only, never reasoning
-                    elif isinstance(message, ToolMessage):
-                        name, start = pending.pop(message.tool_call_id, (message.name, None))
-                        yield event(
-                            "tool_end",
-                            name=name,
-                            result_preview=message.text[:RESULT_PREVIEW_CHARS],
-                            duration_ms=_ms_since(start),
-                            status=message.status,
-                        )
-                        if name in retrieval_tools and message.artifact:
-                            yield event("retrieval", chunks=message.artifact)
-                        elif message.artifact:
-                            yield event(
-                                "notice", kind="tool_artifact", name=name, artifact=message.artifact
-                            )
-    except Exception as exc:  # the customer gets a friendly message; the trace gets details
-        logger.exception("turn failed for session %s", session_id)
-        yield event("error", message=ERROR_MESSAGE, detail=f"{type(exc).__name__}: {exc}")
+        for mode, chunk in agent.stream(turn.input, turn.config, stream_mode=STREAM_MODES):
+            yield from turn.chunk(mode, chunk)
+    except Exception as exc:
+        yield turn.error(exc)
         return
+    yield from turn.finish()
 
-    for piece in TOKEN_CHUNK.findall(answer):
-        yield event("token", text=piece)
-    yield event("final", text=answer, usage=asdict(usage), duration_ms=_ms_since(started))
+
+async def astream_turn(
+    agent,
+    session_id: str,
+    text: str,
+    retrieval_tools: Sequence[str] = ("search_policies",),
+) -> AsyncIterator[AgentEvent]:
+    """Async `stream_turn` (the API): async model calls and checkpointer; sync tools run in
+    LangChain's worker threads, so the event loop is never blocked."""
+    turn = _Turn(session_id, text, retrieval_tools)
+    yield turn.event("user_message", text=text)
+    try:
+        async for mode, chunk in agent.astream(turn.input, turn.config, stream_mode=STREAM_MODES):
+            for event in turn.chunk(mode, chunk):
+                yield event
+    except Exception as exc:
+        yield turn.error(exc)
+        return
+    for event in turn.finish():
+        yield event
 
 
 def _ms_since(start: float | None) -> int | None:

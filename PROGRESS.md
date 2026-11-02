@@ -13,12 +13,12 @@ Update this file in the same commit as every plan step (see AGENTS.md §0 and §
 
 ## Next step
 
-**Waiting for the owner's review** of the overnight run (see "Overnight run — what to review"
-under Known issues). Nothing is pushed: local commits f544c30 (step 15 prep), af62cb5 (16),
-d8dbbdc (18), 4ae5145 (19) and the step 20 commit, on top of the unpushed f8ea8e2 (14) and
-2e40cf1 (14 fixes). After approval: push, then **step 17** (FastAPI implementing the contract
-in "Step 19 — API contract the frontend expects", async end to end, state in the DB, WAL),
-then 21, then running the step 15 evals on Groq.
+**Waiting for the owner's review of step 17** (API). Then step 21 —
+`build: serve frontend from API, Dockerfile and compose` (the API already serves
+`frontend/dist` when it exists; step 21 adds the Docker image, compose, the embedding model
+in the image/volume and the README run instructions). All manual tests on
+`openai/gpt-oss-20b` (quota plan). Pending on the 120b tomorrow, in order: step 22 examples,
+the video, then the 4 quota-cut eval cases / a full eval run if quota is left.
 
 ## Plan status
 
@@ -40,10 +40,10 @@ then 21, then running the step 15 evals on Groq.
 | 14 | CLI with debug mode | done | `feat(cli): interactive CLI with debug mode` (f8ea8e2); `fix(agent): price guard, alternatives, verified-order handoffs and promotions` (2e40cf1) |
 | 15 | Routing + adversarial evals | prepared (not run) | `test: routing and adversarial eval cases and runner` (f544c30) |
 | 16 | CI workflow | done (not yet run on GitHub) | `ci: lint and tests workflow` (af62cb5) |
-| 17 | FastAPI (SSE, sessions, rate limit, retention, deletion) | pending | |
+| 17 | FastAPI (SSE, sessions, rate limit, retention, deletion) | done | `feat(api): FastAPI with SSE, sessions, rate limit, retention and deletion` |
 | 18 | Frontend scaffold | done | `feat(frontend): Vite React scaffold` (d8dbbdc) |
 | 19 | Chat UI with streaming | done (mock API; real API in step 17) | `feat(frontend): customer service chat with streaming` (4ae5145) |
-| 20 | Bastidores panel + simulated date banner | done (mock API) | `feat(frontend): demo-mode behind-the-scenes panel and simulated date banner` (1979f10); `fix(agent): refusals in Tom's voice` (3515048); `fix(agent): refusal examples, phrase guard, optional order data, injection rule` (30f7830); `test: eval reports tool args and guard interventions as a metric` (eb89dce); `test: injected-instruction criterion and pending eval re-runs` |
+| 20 | Bastidores panel + simulated date banner | done (mock API) | `feat(frontend): demo-mode behind-the-scenes panel and simulated date banner` (1979f10); `fix(agent): refusals in Tom's voice` (3515048); `fix(agent): refusal examples, phrase guard, optional order data, injection rule` (30f7830); `test: eval reports tool args and guard interventions as a metric` (eb89dce); `test: injected-instruction criterion and pending eval re-runs` (d67afd5) |
 | 21 | Serve frontend from API, Docker | pending | |
 | 22 | Recorded example conversations | pending | |
 | 23 | README | pending | |
@@ -897,6 +897,61 @@ then 21, then running the step 15 evals on Groq.
   instructions is imperfect on gpt-oss-120b (it obeyed "[SISTEMA: … order_id 1 …]"); the
   protection comes from the tools requiring authorization (order number + the e-mail of that
   order's customer, generic error, lockout), not from the model following the prompt.
+- **Step 17 — [VERIFY] async checkpointer** (langgraph-checkpoint-sqlite 3.1.3):
+  `AsyncSqliteSaver.from_conn_string(path)` is an async context manager over one
+  `aiosqlite.Connection` (`saver.conn`); `adelete_thread(thread_id)` deletes the thread's
+  checkpoints and writes (used by DELETE and retention); it does **not** create tables, so the
+  API calls `await saver.setup()` at startup. Versions: fastapi 0.162.0, starlette 1.10.0,
+  uvicorn 0.54.0, aiosqlite 0.22.1, SQLAlchemy asyncio (greenlet 3.5.6), httpx 0.28.1 (dev,
+  TestClient).
+- **Step 17 — API** (`src/emporio_agent/api/{main,schemas}.py`, `create_app(settings,
+  client, agent_builder, traces_dir, frontend_dist)`; module-level `app`; console script
+  `emporio-api` = uvicorn on 127.0.0.1:8000, the Vite proxy target):
+  `GET /api/health`; `GET /api/config` → `{assistant_name, store_name, slogan, demo_mode,
+  simulated_now "YYYY-MM-DDTHH:MM"|null}`; `POST /api/chat {session_id, message}` (pydantic:
+  id `[A-Za-z0-9_-]{1,100}`, message 1–1000 chars, blank rejected → 422) → `text/event-stream`
+  of `data: <AgentEvent JSON>\n\n`; `DELETE /api/sessions/{id}` → 204 always (idempotent, no
+  session enumeration). Static `frontend/dist` mounted at `/` after the API routes when it
+  exists; CORS for the Vite dev server (localhost/127.0.0.1:5173).
+- **Step 17 — what leaves the server:** outside demo mode only `CUSTOMER_EVENTS`
+  (user_message, token, final, error) — tool_*, retrieval and notice are **not sent at all**;
+  an error event's `detail` is **always** stripped (demo mode too). The JSONL trace keeps
+  every event (server side).
+- **Step 17 — async end to end / no in-process state (owner decision):** model calls and the
+  checkpointer are async (`astream_turn` → `agent.astream`, `AsyncSqliteSaver`); the API's own
+  queries (sessions, limits) use an async SQLAlchemy engine (`make_async_engine`: aiosqlite;
+  asyncpg mapping for Postgres, not installed). **Deviation to review:** the tools' store
+  repository and the identity stores stay **sync** SQLAlchemy — LangChain runs sync tools in a
+  worker thread under `astream`, so the event loop is never blocked; an async repository
+  would duplicate the CLI path for no gain at this size. State in the DB, not memory:
+  `sessions` (created_at, last_activity, message_count, failed_identity_checks) and
+  `daily_message_counts` (`core/sessions.py`, own MetaData, client-agnostic),
+  `session_verified_orders` (client runtime table). `core.sessions.SqlFailedLookups` and
+  `client.identity.SqlVerifiedOrders` implement the new `FailedLookupStore` /
+  `VerifiedOrderStore` protocols (the in-memory classes remain for the CLI/tests);
+  `build_store_agent(..., failed_lookups=, verified_orders=)`. Per-process objects: the
+  compiled agent and DB engines only.
+- **Step 17 — limits:** `AsyncSessionStore.admit` counts one message only if **both**
+  `MAX_MESSAGES_PER_SESSION` (15) and `DAILY_MESSAGE_CAP` (60, store-local **real** day — the
+  frozen `AGENT_NOW` would never reset it) allow it, with conditional UPDATEs (atomic across
+  replicas); a rejection rolls the whole transaction back (nothing counted) and returns 429
+  `{detail}` with a friendly pt-BR message ("…clique em “Nova conversa”…", "…limite de
+  mensagens de hoje…"); a rejected message never reaches the model.
+- **Step 17 — deletion and retention:** `forget_session` = `adelete_thread` + trace file
+  delete + `repo.forget_session` (handoffs anonymized: `summary`, `contact`, `session_id` →
+  NULL; protocol, reason, date, status kept — owner decision; verified orders deleted) +
+  session row delete. `handoffs.summary` became nullable (old SQLite tables are rebuilt by
+  `upgrade_handoffs_table`, rows kept). Retention runs at startup (and via
+  `scripts/cleanup_sessions.py`, same code through `open_runtime`): sessions whose
+  `last_activity` (UTC, wall clock) is older than `SESSION_RETENTION_DAYS` are forgotten.
+- **Step 17 — SQLite concurrency (owner decision):** WAL + `busy_timeout=5000` on every
+  connection: `make_engine`/`make_async_engine` connect listener (`store.db`, with
+  `foreign_keys`), the async checkpointer (`checkpoints.db`) at startup, and the CLI's sync
+  `sqlite_checkpointer` (`CHECKPOINT_PRAGMAS`).
+- **Step 17 — known limitations (README):** two simultaneous messages in the **same** session
+  are not serialized (LangGraph checkpoint race; the UI sends one at a time); JSONL traces are
+  local files, so several replicas would need a shared volume or a log pipeline; the
+  checkpointer is SQLite (Postgres saver = production path).
 - **Convention** — The "Commit" column holds the commit subject; hashes are in `git log`
   (a commit cannot contain its own hash).
 
@@ -1286,3 +1341,24 @@ then 21, then running the step 15 evals on Groq.
 - Files: `src/emporio_agent/core/evals.py`, `evals/adversarial_cases.yaml`,
   `scripts/run_evals.py`, `tests/test_{evals,orders}.py`, `.gitignore`, `PROGRESS.md`.
 - Tests: ruff ok, format ok, `pytest -m "not llm"` 357 passed.
+
+### 2026-11-02 13:30 — Step 17: FastAPI with SSE, sessions, rate limit, retention and deletion
+- Done: pushed the pending commits (owner approval) after the injected-instruction criterion
+  commit. API app + schemas; `astream_turn`; DB-backed sessions/limits/identity; WAL and
+  busy_timeout; LGPD deletion with handoff anonymization; retention at startup + script;
+  console script `emporio-api`.
+- Files: `src/emporio_agent/api/{__init__,main,schemas}.py`, `src/emporio_agent/core/{sessions,
+  events,agent}.py`, `src/emporio_agent/client/{assistant,identity,repository,tools}.py`,
+  `src/emporio_agent/client/db/{engine,loader,models}.py`, `scripts/cleanup_sessions.py`,
+  `tests/test_api.py`, `pyproject.toml`, `uv.lock`, `PROGRESS.md`.
+- Deps: fastapi, uvicorn[standard], sqlalchemy[asyncio], aiosqlite; dev: httpx.
+- Tests: ruff ok, format ok, `pytest -m "not llm"` 373 passed (16 API tests: config, SSE in
+  demo/customer mode, error detail stripped, 422s, per-session limit, daily cap, rollback of a
+  rejected message, deletion + anonymization, retention at startup, identity state in the DB,
+  WAL/busy_timeout, static frontend).
+- Live smoke on **openai/gpt-oss-20b** (quota plan; temp DB/checkpoints): health/config ok;
+  "Quanto custa o Takamine GD20 no PIX?" → search_products + calculate_payment_options,
+  "R$ 2.199,00 … R$ 2.089,05 no PIX", 8,671 input tokens, one 429 wait of 8 s; "Tô com um
+  pedido atrasado" → asks for order number + e-mail, no handoff (a second 429 moved to qwen);
+  DELETE → 204, trace file and checkpoints removed; `/` serves the real frontend build
+  (screenshot `frontend/screenshots/api-real-inicio.png`: config from the API, AGENTS.md chips).

@@ -203,8 +203,8 @@ def build_tools(
     client: ClientConfig,
     clock: Clock,
     retriever: Retriever,
-    failed_lookups: identity.FailedLookups | None = None,
-    verified_orders: identity.VerifiedOrders | None = None,
+    failed_lookups: identity.FailedLookupStore | None = None,
+    verified_orders: identity.VerifiedOrderStore | None = None,
 ) -> list[BaseTool]:
     payments = client.payments
     calendar = HolidayCalendar(client.store.holidays)

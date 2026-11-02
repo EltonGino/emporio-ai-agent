@@ -8,8 +8,13 @@ from __future__ import annotations
 
 import threading
 from collections import Counter
+from typing import Protocol
 
 from langchain_core.runnables import RunnableConfig
+from sqlalchemy import Engine
+from sqlalchemy.orm import Session
+
+from emporio_agent.client.db.models import SessionVerifiedOrder
 
 MAX_FAILED_LOOKUPS = 5  # AGENTS.md §7
 
@@ -35,6 +40,23 @@ ORDER_NOT_VERIFIED = (
 )
 
 
+class FailedLookupStore(Protocol):
+    """Failed identity checks per session: `FailedLookups` (memory) or
+    `core.sessions.SqlFailedLookups` (database, API)."""
+
+    def locked(self, session: str) -> bool: ...
+
+    def record_failure(self, session: str) -> None: ...
+
+
+class VerifiedOrderStore(Protocol):
+    """Orders verified per session: `VerifiedOrders` (memory) or `SqlVerifiedOrders` (DB)."""
+
+    def record(self, session: str, order_id: int) -> None: ...
+
+    def verified(self, session: str | None, order_id: int) -> bool: ...
+
+
 def session_id(config: RunnableConfig | None) -> str | None:
     return ((config or {}).get("configurable") or {}).get("thread_id")
 
@@ -54,6 +76,25 @@ class FailedLookups:
     def record_failure(self, session: str) -> None:
         with self._lock:
             self._failures[session] += 1
+
+
+class SqlVerifiedOrders:
+    """`VerifiedOrders` in the `session_verified_orders` table (API: shared by replicas,
+    survives restarts). Sync: called from tools, which LangChain runs in a worker thread."""
+
+    def __init__(self, engine: Engine) -> None:
+        self.engine = engine
+
+    def record(self, session: str, order_id: int) -> None:
+        with Session(self.engine) as db, db.begin():
+            if db.get(SessionVerifiedOrder, (session, order_id)) is None:
+                db.add(SessionVerifiedOrder(session_id=session, order_id=order_id))
+
+    def verified(self, session: str | None, order_id: int) -> bool:
+        if session is None:
+            return False
+        with Session(self.engine) as db:
+            return db.get(SessionVerifiedOrder, (session, order_id)) is not None
 
 
 class VerifiedOrders:

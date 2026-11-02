@@ -4,6 +4,8 @@ version = "0.1.0"
 description = "AI customer service agent for retail — built for Empório da Música."
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "aiosqlite>=0.22.1",
+    "fastapi>=0.162.0",
     "fastembed>=0.9.1",
     "holidays>=0.107",
     "langchain>=1.4.7",
@@ -18,14 +20,16 @@ dependencies = [
     "rank-bm25>=0.2.2",
     "rapidfuzz>=3.14.6",
     "rich>=15.0.0",
-    "sqlalchemy>=2.1.6",
+    "sqlalchemy[asyncio]>=2.1.6",
     "typer>=0.27.3",
     "tzdata>=2026.6",
     "unidecode>=1.4.0",
+    "uvicorn[standard]>=0.54.0",
 ]
 
 [project.scripts]
 emporio-chat = "emporio_agent.cli:app"
+emporio-api = "emporio_agent.api.main:run"
 
 [build-system]
 requires = ["uv_build>=0.13.6,<0.14.0"]
@@ -52,6 +56,7 @@ markers = [
 
 [dependency-groups]
 dev = [
+    "httpx>=0.28.1",
     "pytest>=9.2.0",
     "ruff>=0.17.3",
 ]

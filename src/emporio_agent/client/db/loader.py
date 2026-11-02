@@ -168,16 +168,17 @@ def load_store_data(engine: Engine, raw_dir: Path = RAW_DIR) -> dict[str, int]:
 
 
 def upgrade_handoffs_table(engine: Engine) -> bool:
-    """SQLite databases created before a new handoff reason have an older CHECK on `reason`,
-    and SQLite can't alter a CHECK: rebuild the table, keeping its rows. (A real deployment
-    would use migrations, e.g. Alembic.) Returns True if it rebuilt the table."""
+    """SQLite databases created before a schema change of `handoffs` (a new reason in the
+    CHECK, `summary` made nullable) can't be altered in place: rebuild the table, keeping its
+    rows. (A real deployment would use migrations, e.g. Alembic.) True if it rebuilt it."""
     if engine.dialect.name != "sqlite":
         return False
     with engine.begin() as conn:
         sql = conn.execute(
             text("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'handoffs'")
         ).scalar()
-        if sql is None or all(f"'{reason}'" in sql for reason in HANDOFF_REASONS):
+        current = all(f"'{reason}'" in sql for reason in HANDOFF_REASONS) if sql else True
+        if sql is None or (current and "summary VARCHAR NOT NULL" not in sql):
             return False
         conn.execute(text("ALTER TABLE handoffs RENAME TO handoffs_old"))
         conn.execute(text("DROP INDEX IF EXISTS ix_handoffs_session_id"))
