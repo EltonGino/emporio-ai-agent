@@ -7,6 +7,7 @@ from langchain_core.messages import ToolCall
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from emporio_agent.client import identity
 from emporio_agent.client.db.engine import make_engine
 from emporio_agent.client.db.loader import load_store_data
 from emporio_agent.client.db.models import Handoff
@@ -34,9 +35,18 @@ def engine(tmp_path):
 
 @pytest.fixture
 def make_tools(engine, policy_retriever):
+    """Tools at a simulated time. Orders 7, 8 and 9 count as already verified (number + email)
+    in sessions s1 and s2, as if get_order_status had succeeded there."""
+    verified = identity.VerifiedOrders()
+    for name in ("s1", "s2"):
+        for order_id in (7, 8, 9):
+            verified.record(name, order_id)
+
     def make(now: str = "2026-03-25T10:30"):
         repo = SqlStoreRepository(engine)
-        return {t.name: t for t in build_tools(repo, CLIENT, FixedClock(at(now)), policy_retriever)}
+        clock = FixedClock(at(now))
+        tools = build_tools(repo, CLIENT, clock, policy_retriever, verified_orders=verified)
+        return {t.name: t for t in tools}
 
     return make
 
@@ -185,8 +195,10 @@ def test_all_tools_registered(make_tools):
 
 def test_same_case_twice_returns_the_existing_protocol(make_tools, engine):
     tools = make_tools("2026-02-20T10:00")
-    first = handoff(tools, reason="other", summary="Devolução do pedido 7.", order_id=7)
-    again = handoff(tools, reason="other", summary="Cliente confirmou a devolução.", order_id=7)
+    first = handoff(tools, reason="return_request", summary="Devolução do pedido 7.", order_id=7)
+    again = handoff(
+        tools, reason="return_request", summary="Cliente confirmou a devolução.", order_id=7
+    )
     assert again["protocol"] == first["protocol"] == "EMP-20260220-0001"
     assert again["already_registered"] is True and "already_registered" not in first
     with Session(engine) as db:
@@ -209,3 +221,41 @@ def test_idempotency_key_is_session_reason_and_order(make_tools):
     assert handoff(tools, reason="manager_question", order_id=8)["protocol"] != base
     no_order = handoff(tools, summary="Dúvida geral para a gerência.")["protocol"]
     assert handoff(tools, summary="Mesma dúvida de novo.")["protocol"] == no_order
+
+
+# --- order-related handoffs need a verified order (real case: "Tô com um pedido atrasado") --
+
+
+def raw_handoff(tools, session_name="s9", **args):
+    args = {"reason": "delayed_order", "summary": "Cliente relatou pedido atrasado"} | args
+    return tools["handoff_to_human"].invoke(args, config=session(session_name))
+
+
+@pytest.mark.parametrize("reason", ["delayed_order", "return_request"])
+def test_order_reasons_without_a_verified_order_are_refused(make_tools, engine, reason):
+    tools = make_tools()
+    assert raw_handoff(tools, reason=reason) == identity.ORDER_NOT_VERIFIED  # order_id 0
+    assert raw_handoff(tools, reason=reason, order_id=8) == identity.ORDER_NOT_VERIFIED
+    with Session(engine) as db:
+        assert db.scalars(select(Handoff)).all() == []
+
+
+def test_any_order_id_given_must_be_verified(make_tools):
+    tools = make_tools()
+    assert raw_handoff(tools, reason="complaint", order_id=8) == identity.ORDER_NOT_VERIFIED
+    assert "protocol" in json.loads(raw_handoff(tools, reason="complaint", contact=""))
+
+
+def test_order_verified_by_lookup_allows_the_handoff(make_tools):
+    tools = make_tools()
+    lookup = {"order_id": 8, "email": "anacarol.ferreira@coldmail.com"}
+    tools["get_order_status"].invoke(lookup, config=session("s9"))
+    result = json.loads(raw_handoff(tools, order_id=8))
+    assert result["protocol"].startswith("EMP-")
+    assert raw_handoff(tools, "s10", order_id=8) == identity.ORDER_NOT_VERIFIED  # per session
+
+
+def test_failed_lookup_does_not_verify(make_tools):
+    tools = make_tools()
+    tools["get_order_status"].invoke({"order_id": 8, "email": "x@y.z"}, config=session("s9"))
+    assert raw_handoff(tools, order_id=8) == identity.ORDER_NOT_VERIFIED

@@ -10,6 +10,7 @@ token usage (dimmed). Commands: /new (new conversation), /exit.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import uuid
 from datetime import datetime
@@ -131,6 +132,12 @@ def chat(
         ),
     ] = None,
 ) -> None:
+    # Middleware decisions are shown by --debug and kept in the JSONL trace; don't let Python's
+    # last-resort logging handler print them in the customer's terminal.
+    package_logger = logging.getLogger("emporio_agent")
+    package_logger.addHandler(logging.NullHandler())
+    package_logger.propagate = False
+
     settings, client = get_settings(), get_client_config()
     clock = get_clock(parse_now(now))
     if settings.llm_provider == "groq" and not os.environ.get("GROQ_API_KEY"):
@@ -145,7 +152,11 @@ def chat(
     console.print(f"[bold]{client.store.name}[/] — {client.store.slogan}")
     if isinstance(clock, FixedClock):
         console.print(f"[yellow]Data simulada: {clock.now():%d/%m/%Y %H:%M} (horário da loja)[/]")
-    console.print(f"[dim]Conversa {session_id} · /new para recomeçar · /exit para sair[/]\n")
+    if session:
+        console.print(f"[dim]Retomando a conversa {session_id}[/]")
+    else:  # never resume implicitly: a new session id unless --session is given
+        console.print(f"[dim]Nova conversa: {session_id} (para retomar: --session {session_id})[/]")
+    console.print("[dim]/new para recomeçar · /exit para sair[/]\n")
 
     while True:
         try:

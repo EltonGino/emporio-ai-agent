@@ -6,9 +6,10 @@ from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
 
 from emporio_agent.client.assistant import (
+    SAFE_PRICE_ANSWER,
     SAFE_PROTOCOL_ANSWER,
     model_chain,
-    protocol_guard,
+    output_guard,
     render_system_prompt,
 )
 from emporio_agent.config import Settings, get_client_config
@@ -213,7 +214,7 @@ def guarded_agent(*models, tools=()):
         InMemorySaver(),
         20,
         2500,
-        guards=[protocol_guard()],
+        guards=[output_guard()],
     )
 
 
@@ -270,6 +271,30 @@ def test_miscopied_protocol_is_caught():
         guarded_agent(ScriptedModel(script=script), tools=[handoff_to_human]), "s", "x"
     )
     assert result.text == "Protocolo: EMP-20260325-0001."
+
+
+@tool
+def search_products(query: str) -> str:
+    """Fake empty search."""
+    return '{"total_matches":0,"products":[],"unavailable":[{"id":136,"name":"Ibanez Bass 2X"}]}'
+
+
+def test_invented_prices_never_reach_the_customer():
+    invented = AIMessage("Temos o **Ibanez SR500E** – R$ 2.399,00 e o **GSR200** – R$ 1.299,00.")
+    honest = AIMessage("O Ibanez Bass 2X saiu do catálogo. Quer ver outros baixos?")
+    model = ScriptedModel(
+        script=[call("search_products", {"query": "Ibanez Bass 2X"}), invented, honest]
+    )
+    result = run_turn(guarded_agent(model, tools=[search_products]), "s1", "e o Ibanez Bass 2X?")
+    assert result.text == honest.content
+    assert "R$ 2.399,00" in model.seen[-1][0].content  # the correction note named it
+
+
+def test_safe_answer_when_prices_stay_invented():
+    invented = AIMessage("O SR500E sai por R$ 2.399,00.")
+    model = ScriptedModel(script=[call("search_products", {"query": "x"}), invented, invented])
+    result = run_turn(guarded_agent(model, tools=[search_products]), "s1", "baixos?")
+    assert result.text == SAFE_PRICE_ANSWER
 
 
 # --- history trimming ------------------------------------------------------------------------

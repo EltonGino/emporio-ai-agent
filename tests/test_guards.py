@@ -43,3 +43,81 @@ def test_issued_protocols_only_from_the_handoff_tool():
         ToolMessage("not json", tool_call_id="3", name="handoff_to_human"),
     ]
     assert issued_protocols(messages, "handoff_to_human") == {"EMP-20260325-0001"}
+
+
+# --- money amounts ---------------------------------------------------------------------------
+
+from decimal import Decimal  # noqa: E402
+
+from langchain_core.messages import AIMessage, HumanMessage  # noqa: E402
+
+from emporio_agent.core.guards import PriceCheck, cited_amounts, parse_amount  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    ("text", "value"),
+    [
+        ("2.199,00", "2199.00"),
+        ("2.199", "2199.00"),
+        ("1.000", "1000.00"),
+        ("2199.0", "2199.00"),
+        ("183,25", "183.25"),
+        ("12.000,50", "12000.50"),
+        ("50", "50.00"),
+    ],
+)
+def test_parse_amount(text, value):
+    assert parse_amount(text) == Decimal(value)
+
+
+def test_cited_amounts():
+    answer = "Sai por **R$ 2.199,00**, ou R$2.089,05 no PIX; 12x de R$ 183,25. Uns 500 reais."
+    assert set(cited_amounts(answer)) == {
+        Decimal("2199.00"),
+        Decimal("2089.05"),
+        Decimal("183.25"),
+        Decimal("500.00"),
+    }
+
+
+SEARCH_RESULT = ToolMessage(
+    '{"products":[{"name":"Takamine GD20","price":2199.0,"price_text":"R$ 2.199,00"}]}',
+    tool_call_id="1",
+    name="search_products",
+)
+CHECK = PriceCheck(correction_note=lambda p: "", safe_answer="safe")
+
+
+def test_amounts_from_this_turn_tools_pass():
+    history = [HumanMessage("quanto custa o GD20?"), SEARCH_RESULT]
+    assert CHECK.problems("O GD20 sai por R$ 2.199,00 (ou R$ 2.199).", history) == set()
+
+
+def test_invented_prices_are_caught():
+    """Real case: after an empty search the model listed basses 'por R$ 2.399,00'."""
+    history = [
+        HumanMessage("e o Ibanez Bass 2X?"),
+        ToolMessage('{"total_matches":0,"products":[]}', tool_call_id="1"),
+    ]
+    answer = "Temos o **Ibanez SR500E** – R$ 2.399,00 e o **GSR200** – R$ 1.299,00."
+    assert CHECK.problems(answer, history) == {"R$ 2.399,00", "R$ 1.299,00"}
+
+
+def test_computed_amounts_are_caught():
+    history = [HumanMessage("e no PIX?"), SEARCH_RESULT]
+    assert CHECK.problems("Você economiza R$ 109,95.", history) == {"R$ 109,95"}
+
+
+def test_customer_amounts_may_be_repeated():
+    history = [HumanMessage("violões até R$ 1.000?"), SEARCH_RESULT]
+    assert CHECK.problems("Até **R$ 1.000** temos estes:", history) == set()
+
+
+def test_previous_turn_tool_results_do_not_count():
+    history = [
+        HumanMessage("quanto custa o GD20?"),
+        SEARCH_RESULT,
+        AIMessage("R$ 2.199,00"),
+        HumanMessage("e a cor?"),
+    ]
+    assert CHECK.problems("Natural, e sai por R$ 2.199,00.", history) == {"R$ 2.199,00"}

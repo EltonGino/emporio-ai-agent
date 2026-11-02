@@ -1,10 +1,14 @@
 """Output guards: deterministic checks on the final answer **before** it reaches the customer.
 
-ProtocolGuard: an answer may only present protocol numbers that the handoff tool really issued
-in this session. Models were seen inventing one ("Protocolo: 20231102-8745") without opening a
-case. The guard holds the final answer, validates it and, if it cites an unknown protocol,
-asks the model once more with a correction note; if that still fails, it replaces the answer
-with a safe one. Answers are emitted only after this check (see PROGRESS.md: streaming).
+OutputGuard holds the final answer (an AI message without tool calls) and runs its checks.
+If a check fails, the model is asked once more with a correction note; if a check still fails,
+the answer is replaced with that check's safe answer. Invalid answers are never stored or
+emitted (see PROGRESS.md: streaming).
+
+- ProtocolCheck: protocol numbers must have been issued by the handoff tool in this session
+  (models invented "Protocolo: 20231102-8745" without opening a case).
+- PriceCheck: every money amount must appear in this turn's tool results or in what the
+  customer wrote (a model invented basses "por R$ 2.399,00" after an empty search).
 """
 
 from __future__ import annotations
@@ -13,15 +17,37 @@ import json
 import logging
 import re
 from collections.abc import Awaitable, Callable, Iterable, Sequence
-from typing import Any
+from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
+from typing import Any, Protocol
 
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
-from langchain_core.messages import AIMessage, AnyMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage, ToolMessage
 from unidecode import unidecode
 
 from emporio_agent.core.events import notify
 
 logger = logging.getLogger(__name__)
+
+
+class Check(Protocol):
+    name: str
+    safe_answer: str
+
+    def problems(self, answer: str, history: Sequence[AnyMessage]) -> set[str]:
+        """What is wrong with the answer (empty = fine), given the whole conversation."""
+        ...
+
+    def correction(self, problems: set[str]) -> str: ...
+
+
+def current_turn(history: Sequence[AnyMessage]) -> Sequence[AnyMessage]:
+    """Messages from the last customer message on."""
+    starts = [i for i, m in enumerate(history) if isinstance(m, HumanMessage)]
+    return history[starts[-1] :] if starts else history
+
+
+# --- protocols -----------------------------------------------------------------------------
 
 # Date + number anywhere in the text, with or without a prefix: "EMP-20260325-0001",
 # "20231102-8745". Phones ("3341-4444") and CEPs ("79202-333") don't have 8 leading digits.
@@ -70,6 +96,81 @@ def claimed_protocols(text: str, keywords: Sequence[str]) -> set[str]:
     return claimed
 
 
+@dataclass
+class ProtocolCheck:
+    tool_name: str
+    keywords: Sequence[str]
+    correction_note: Callable[[set[str]], str]
+    safe_answer: str
+    name: str = "protocol"
+
+    def problems(self, answer: str, history: Sequence[AnyMessage]) -> set[str]:
+        keywords = [unidecode(k).lower() for k in self.keywords]
+        return claimed_protocols(answer, keywords) - issued_protocols(history, self.tool_name)
+
+    def correction(self, problems: set[str]) -> str:
+        return self.correction_note(problems)
+
+
+# --- money amounts -------------------------------------------------------------------------
+
+# "R$ 2.199,00", "R$2199", "R$ 1.000", "R$ 183,25", "2.089,05 reais"
+MONEY_IN_ANSWER = re.compile(r"R\$\s*(\d[\d.,]*\d|\d)|(\d[\d.,]*\d|\d)\s*reais\b", re.IGNORECASE)
+NUMBER = re.compile(r"\d[\d.,]*\d|\d")
+CENT = Decimal("0.01")
+
+
+def parse_amount(text: str) -> Decimal | None:
+    """pt-BR or plain number → Decimal: "2.199,00", "1.000", "2199.0", "183,25"."""
+    text = text.strip(".,")
+    if "," in text:  # pt-BR: dots are thousands, comma is the decimal separator
+        text = text.replace(".", "").replace(",", ".")
+    elif re.fullmatch(r"\d{1,3}(?:\.\d{3})+", text):  # "1.000", "12.000"
+        text = text.replace(".", "")
+    try:
+        return Decimal(text).quantize(CENT)
+    except InvalidOperation:
+        return None
+
+
+def amounts_in(text: str) -> set[Decimal]:
+    """Every number in a text (tool JSON, customer message): what the answer may cite."""
+    return {a for n in NUMBER.findall(text) if (a := parse_amount(n)) is not None}
+
+
+def cited_amounts(answer: str) -> dict[Decimal, str]:
+    """Money amounts the answer cites, with the text as written."""
+    cited = {}
+    for match in MONEY_IN_ANSWER.finditer(answer):
+        raw = match.group(1) or match.group(2)
+        if (amount := parse_amount(raw)) is not None:
+            cited[amount] = match.group(0)
+    return cited
+
+
+@dataclass
+class PriceCheck:
+    correction_note: Callable[[set[str]], str]
+    safe_answer: str
+    name: str = "price"
+
+    def problems(self, answer: str, history: Sequence[AnyMessage]) -> set[str]:
+        allowed: set[Decimal] = set()
+        for message in current_turn(history):
+            if isinstance(message, ToolMessage):
+                allowed |= amounts_in(message.text)
+        for message in history:  # amounts the customer wrote ("até R$ 1.000") may be repeated
+            if isinstance(message, HumanMessage):
+                allowed |= amounts_in(message.text)
+        return {text for amount, text in cited_amounts(answer).items() if amount not in allowed}
+
+    def correction(self, problems: set[str]) -> str:
+        return self.correction_note(problems)
+
+
+# --- middleware ----------------------------------------------------------------------------
+
+
 def _final_answer(response: ModelResponse | AIMessage) -> AIMessage | None:
     """The AI message of a model response if it is a final answer (no tool calls)."""
     message = response if isinstance(response, AIMessage) else response.result[-1]
@@ -78,69 +179,61 @@ def _final_answer(response: ModelResponse | AIMessage) -> AIMessage | None:
     return None
 
 
-class ProtocolGuard(AgentMiddleware):
-    def __init__(
-        self,
-        tool_name: str,
-        keywords: Sequence[str],
-        correction_note: Callable[[set[str]], str],
-        safe_answer: str,
-    ) -> None:
+class OutputGuard(AgentMiddleware):
+    def __init__(self, checks: Sequence[Check]) -> None:
         super().__init__()
-        self.tool_name = tool_name
-        self.keywords = [unidecode(k).lower() for k in keywords]
-        self.correction_note = correction_note
-        self.safe_answer = safe_answer
+        self.checks = list(checks)
 
-    def invalid_protocols(self, request: ModelRequest, answer: AIMessage) -> set[str]:
+    def failures(self, request: ModelRequest, answer: AIMessage) -> dict[str, set[str]]:
         # The full state, not the trimmed request: old turns lose their tool messages.
         history: list[Any] = [*request.state.get("messages", []), *request.messages]
-        issued = issued_protocols(history, self.tool_name)
-        return claimed_protocols(answer.text, self.keywords) - issued
+        found = {c.name: c.problems(answer.text, history) for c in self.checks}
+        return {name: problems for name, problems in found.items() if problems}
 
     def _corrected(
-        self, request: ModelRequest, invalid: set[str], discarded: AIMessage
+        self, request: ModelRequest, failures: dict[str, set[str]], discarded: AIMessage
     ) -> ModelRequest:
-        logger.warning("answer cited protocol(s) never issued: %s; asking again", invalid)
-        # The discarded answer's tokens were spent too: report them for the turn's usage.
-        notify(
-            "protocol_guard",
+        logger.warning("answer failed output checks %s: asking again", failures)
+        notify(  # the discarded answer's tokens were spent too: count them in the turn
+            "output_guard",
             action="retry",
-            invalid=sorted(invalid),
+            failures={name: sorted(p) for name, p in failures.items()},
             discarded_usage=discarded.usage_metadata,
             model=discarded.response_metadata.get("model_name"),
         )
+        notes = [c.correction(failures[c.name]) for c in self.checks if c.name in failures]
         system = request.system_message.text if request.system_message else ""
-        note = self.correction_note(invalid)
-        return request.override(system_message=SystemMessage(f"{system}\n\n{note}"))
+        return request.override(system_message=SystemMessage("\n\n".join([system, *notes])))
 
-    def _safe(self, request: ModelRequest, response: ModelResponse | AIMessage):
+    def _final(self, request: ModelRequest, response: ModelResponse | AIMessage):
         answer = _final_answer(response)
-        if answer is None or not self.invalid_protocols(request, answer):
+        if answer is None or not (failures := self.failures(request, answer)):
             return response
-        logger.warning("protocol still invalid after correction: safe answer")
+        check = next(c for c in self.checks if c.name in failures)
+        logger.warning("answer still failed %s after correction: safe answer", failures)
         notify(
-            "protocol_guard",
+            "output_guard",
             action="safe_answer",
+            failures={name: sorted(p) for name, p in failures.items()},
             discarded_usage=answer.usage_metadata,
             model=answer.response_metadata.get("model_name"),
         )
-        return AIMessage(self.safe_answer)
+        return AIMessage(check.safe_answer)
 
     def wrap_model_call(
         self, request: ModelRequest, handler: Callable[[ModelRequest], ModelResponse]
     ) -> ModelResponse | AIMessage:
         response = handler(request)
         answer = _final_answer(response)
-        if answer is None or not (invalid := self.invalid_protocols(request, answer)):
+        if answer is None or not (failures := self.failures(request, answer)):
             return response
-        return self._safe(request, handler(self._corrected(request, invalid, answer)))
+        return self._final(request, handler(self._corrected(request, failures, answer)))
 
     async def awrap_model_call(
         self, request: ModelRequest, handler: Callable[[ModelRequest], Awaitable[ModelResponse]]
     ) -> ModelResponse | AIMessage:
         response = await handler(request)
         answer = _final_answer(response)
-        if answer is None or not (invalid := self.invalid_protocols(request, answer)):
+        if answer is None or not (failures := self.failures(request, answer)):
             return response
-        return self._safe(request, await handler(self._corrected(request, invalid, answer)))
+        return self._final(request, await handler(self._corrected(request, failures, answer)))

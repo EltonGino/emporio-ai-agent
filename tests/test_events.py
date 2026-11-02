@@ -6,7 +6,7 @@ from langchain_core.messages import AIMessage
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
 
-from emporio_agent.client.assistant import protocol_guard
+from emporio_agent.client.assistant import output_guard
 from emporio_agent.core.agent import build_agent, run_turn
 from emporio_agent.core.events import CUSTOMER_EVENTS, ERROR_MESSAGE, stream_turn
 from emporio_agent.core.tracing import JsonlTracer, trace_path, traced
@@ -106,10 +106,11 @@ def test_protocol_guard_notice_and_discarded_usage():
     invented = answer("Protocolo: 20231102-8745", input_tokens=500)
     honest = answer("Quer que eu registre o caso?", input_tokens=600)
     events = events_of(
-        agent_with(ScriptedModel(script=[invented, honest]), guards=[protocol_guard()])
+        agent_with(ScriptedModel(script=[invented, honest]), guards=[output_guard()])
     )
     notice = next(e for e in events if e.type == "notice")
-    assert notice.data["kind"] == "protocol_guard" and notice.data["invalid"] == ["20231102-8745"]
+    assert notice.data["kind"] == "output_guard"
+    assert notice.data["failures"] == {"protocol": ["20231102-8745"]}
     usage = events[-1].data["usage"]
     assert (usage["model_calls"], usage["input_tokens"]) == (2, 1100)  # discarded call counted
     customer_text = "".join(e.model_dump_json() for e in events if e.type in CUSTOMER_EVENTS)

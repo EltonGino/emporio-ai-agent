@@ -16,7 +16,7 @@ from emporio_agent.client.tools import br_datetime, build_tools
 from emporio_agent.clock import Clock
 from emporio_agent.config import ClientConfig, Settings
 from emporio_agent.core.agent import build_agent
-from emporio_agent.core.guards import ProtocolGuard
+from emporio_agent.core.guards import OutputGuard, PriceCheck, ProtocolCheck
 from emporio_agent.core.retrieval.base import Retriever
 
 GROQ_FALLBACK_RETRIES = 0  # a 429 moves on to the next model at once
@@ -26,12 +26,16 @@ SAFE_PROTOCOL_ANSWER = (
     "Desculpe, me confundi aqui: ainda não registrei nenhum chamado. "
     "Quer que eu registre seu caso com a equipe agora para gerar o protocolo?"
 )
+SAFE_PRICE_ANSWER = (
+    "Desculpe, não consegui confirmar esses valores agora. "
+    "Quer que eu consulte o catálogo de novo pra você?"
+)
 
 
 def protocol_correction_note(invalid: set[str]) -> str:
     codes = ", ".join(sorted(invalid))
     return (
-        "## Correção obrigatória\n"
+        "## Correção obrigatória (protocolo)\n"
         f"Sua resposta anterior citou como protocolo {codes}, que não foi gerado por "
         "handoff_to_human nesta conversa. Responda de novo sem esse número. Só informe "
         "protocolos devolvidos por handoff_to_human; se o caso ainda não foi registrado, "
@@ -39,12 +43,28 @@ def protocol_correction_note(invalid: set[str]) -> str:
     )
 
 
-def protocol_guard() -> ProtocolGuard:
-    return ProtocolGuard(
-        tool_name="handoff_to_human",
-        keywords=("protocolo", "protocol"),  # also English/Spanish answers
-        correction_note=protocol_correction_note,
-        safe_answer=SAFE_PROTOCOL_ANSWER,
+def price_correction_note(invalid: set[str]) -> str:
+    amounts = ", ".join(sorted(invalid))
+    return (
+        "## Correção obrigatória (valores)\n"
+        f"Sua resposta anterior citou {amounts}, que não aparece nos resultados das "
+        "ferramentas desta mensagem. Responda de novo citando só valores devolvidos pelas "
+        "ferramentas neste turno (consulte de novo se precisar), sem calcular nem inventar "
+        "produtos ou preços."
+    )
+
+
+def output_guard() -> OutputGuard:
+    return OutputGuard(
+        [
+            ProtocolCheck(
+                tool_name="handoff_to_human",
+                keywords=("protocolo", "protocol"),  # also English/Spanish answers
+                correction_note=protocol_correction_note,
+                safe_answer=SAFE_PROTOCOL_ANSWER,
+            ),
+            PriceCheck(correction_note=price_correction_note, safe_answer=SAFE_PRICE_ANSWER),
+        ]
     )
 
 
@@ -127,5 +147,5 @@ def build_store_agent(
         settings.history_max_messages,
         settings.history_max_tokens,
         settings.rate_limit_max_wait_seconds,
-        guards=[protocol_guard()],
+        guards=[output_guard()],
     )

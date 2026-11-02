@@ -12,16 +12,18 @@ from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
-from sqlalchemy import Engine, inspect
+from sqlalchemy import Engine, inspect, text
 from sqlalchemy.orm import Session
 
 from emporio_agent.client.db.models import (
+    HANDOFF_REASONS,
     ORDER_STATUSES,
     PRODUCT_STATUSES,
     STORE_MODELS,
     Base,
     Category,
     Customer,
+    Handoff,
     Order,
     OrderItem,
     Product,
@@ -165,9 +167,32 @@ def load_store_data(engine: Engine, raw_dir: Path = RAW_DIR) -> dict[str, int]:
     return {name: len(objects) for name, objects in records.items()}
 
 
+def upgrade_handoffs_table(engine: Engine) -> bool:
+    """SQLite databases created before a new handoff reason have an older CHECK on `reason`,
+    and SQLite can't alter a CHECK: rebuild the table, keeping its rows. (A real deployment
+    would use migrations, e.g. Alembic.) Returns True if it rebuilt the table."""
+    if engine.dialect.name != "sqlite":
+        return False
+    with engine.begin() as conn:
+        sql = conn.execute(
+            text("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'handoffs'")
+        ).scalar()
+        if sql is None or all(f"'{reason}'" in sql for reason in HANDOFF_REASONS):
+            return False
+        conn.execute(text("ALTER TABLE handoffs RENAME TO handoffs_old"))
+        conn.execute(text("DROP INDEX IF EXISTS ix_handoffs_session_id"))
+        Handoff.__table__.create(conn)
+        old_columns = {row[1] for row in conn.execute(text("PRAGMA table_info(handoffs_old)"))}
+        columns = ", ".join(c.name for c in Handoff.__table__.columns if c.name in old_columns)
+        conn.execute(text(f"INSERT INTO handoffs ({columns}) SELECT {columns} FROM handoffs_old"))
+        conn.execute(text("DROP TABLE handoffs_old"))
+    return True
+
+
 def ensure_store_data(engine: Engine, raw_dir: Path = RAW_DIR) -> bool:
     """Build the store tables if they don't exist yet. Returns True if it built them."""
     if inspect(engine).has_table(Product.__tablename__):
+        upgrade_handoffs_table(engine)
         Base.metadata.create_all(engine)  # runtime tables added by later versions
         return False
     load_store_data(engine, raw_dir)

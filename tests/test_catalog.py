@@ -283,3 +283,40 @@ def test_accessory_flag_does_not_block_results(tools):
 
 def test_instrument_query_is_not_flagged(tools):
     assert "possible_accessory_query" not in call(tools["search_products"], {"query": "ukulele"})
+
+
+# --- alternatives and promotions (real cases from manual CLI tests) --------------------------
+
+
+def test_unsellable_item_comes_with_same_category_alternatives(repo):
+    """'e o Ibanez Bass 2X?': discontinued; the model invented basses when none were given."""
+    found = repo.find_products(ProductFilters(query="Ibanez Bass 2X"))
+    assert [p.id for p in found.unavailable] == [136]
+    alternatives = found.alternatives
+    assert alternatives and all(p.category == "Baixos" for p in alternatives)
+    assert all(p.availability == "disponivel" for p in alternatives)
+    gaps = [abs(p.final_price - Decimal("441")) for p in alternatives]
+    assert gaps == sorted(gaps)  # closest price first
+
+
+def test_alternatives_skip_items_already_in_the_results(repo):
+    found = repo.find_products(ProductFilters(query="Giannini GF-3D"))
+    shown = {p.id for p in found.products}
+    assert found.alternatives and not shown & {p.id for p in found.alternatives}
+
+
+def test_no_alternatives_when_the_item_is_available(repo):
+    assert repo.find_products(ProductFilters(query="takamine gd20")).alternatives == []
+
+
+def test_on_promotion_filter(repo):
+    """'tem ukulele em promoção?': both ukuleles on sale, not just the first one seen."""
+    found = repo.find_products(ProductFilters(category="ukulele", on_promotion=True))
+    assert {p.id for p in found.products} == {121, 127}
+
+
+def test_search_tool_returns_alternatives(tools):
+    result = call(tools["search_products"], {"query": "Ibanez Bass 2X"})
+    assert result["products"] == [] and result["unavailable"][0]["availability"] == "descontinuado"
+    assert {p["category"] for p in result["alternatives"]} == {"Baixos"}
+    assert all("price_text" in p for p in result["alternatives"])

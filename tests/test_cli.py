@@ -1,7 +1,7 @@
 import json
 
 import pytest
-from fakes import ScriptedModel, call
+from fakes import ProviderError, ScriptedModel, call
 from langchain_core.messages import AIMessage
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
@@ -111,3 +111,24 @@ def test_error_event_is_shown_politely(fake_agent):
     result = runner.invoke(cli.app, ["--debug"], input="oi\n/exit\n")
     assert "problema técnico" in result.output
     assert "RuntimeError: boom" in result.output  # details only in debug
+
+
+def test_without_session_every_run_starts_a_new_conversation(fake_agent, tmp_path):
+    fake_agent(AIMessage("um"), AIMessage("dois"))
+    first = runner.invoke(cli.app, [], input="oi\n/exit\n")
+    second = runner.invoke(cli.app, [], input="oi\n/exit\n")
+    assert "Nova conversa:" in first.output and "Nova conversa:" in second.output
+    assert len(list(tmp_path.glob("*.jsonl"))) == 2  # two different session ids
+
+
+def test_explicit_session_resumes(fake_agent):
+    fake_agent(AIMessage("ok"))
+    result = runner.invoke(cli.app, ["--session", "abc"], input="/exit\n")
+    assert "Retomando a conversa abc" in result.output
+
+
+def test_middleware_logs_stay_out_of_the_terminal(fake_agent):
+    fake_agent(ProviderError(429, retry_after="99"), AIMessage("ok"))  # 1 model: gives up
+    result = runner.invoke(cli.app, [], input="oi\n/exit\n")
+    assert "429 on" not in result.output
+    assert "muitas conversas" in result.output  # the friendly rate-limit answer

@@ -106,7 +106,16 @@ class Promotion(Base):
     product: Mapped[Product] = relationship(back_populates="promotions")
 
 
-HANDOFF_REASONS = ("complaint", "delayed_order", "manager_question", "unavailable_item", "other")
+HANDOFF_REASONS = (
+    "complaint",
+    "delayed_order",
+    "return_request",
+    "manager_question",
+    "unavailable_item",
+    "other",
+)
+# Reasons about a specific order: they need an order verified (number + email) in the session.
+ORDER_HANDOFF_REASONS = frozenset({"delayed_order", "return_request"})
 
 
 class Handoff(Base):

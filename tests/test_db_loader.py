@@ -151,3 +151,44 @@ def test_bad_csv_reports_the_file(engine, tmp_path):
 def test_ensure_store_data_builds_once(engine):
     assert ensure_store_data(engine) is True
     assert ensure_store_data(engine) is False
+
+
+OLD_HANDOFFS_SQL = """
+CREATE TABLE handoffs (
+    id INTEGER PRIMARY KEY, protocol VARCHAR(20) UNIQUE NOT NULL, created_at DATETIME NOT NULL,
+    session_id VARCHAR, reason VARCHAR(20) NOT NULL, order_id INTEGER, summary VARCHAR NOT NULL,
+    contact VARCHAR, status VARCHAR(20) NOT NULL,
+    CONSTRAINT ck_reason CHECK (reason IN
+        ('complaint', 'delayed_order', 'manager_question', 'unavailable_item', 'other'))
+)"""
+
+
+def test_old_handoffs_table_is_upgraded_keeping_rows(loaded):
+    """Dev DBs created before the 'return_request' reason have an older CHECK constraint."""
+    from sqlalchemy import text
+
+    from emporio_agent.client.db.loader import upgrade_handoffs_table
+
+    with loaded.begin() as conn:
+        conn.execute(text("DROP TABLE handoffs"))
+        conn.execute(text(OLD_HANDOFFS_SQL))
+        conn.execute(
+            text(
+                "INSERT INTO handoffs VALUES (1, 'EMP-20260325-0001', '2026-03-25 10:30:00',"
+                " 's1', 'complaint', NULL, 'antigo', NULL, 'open')"
+            )
+        )
+    assert upgrade_handoffs_table(loaded) is True
+    assert upgrade_handoffs_table(loaded) is False  # already current
+    with loaded.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO handoffs (protocol, created_at, reason, summary, status) VALUES"
+                " ('EMP-20260325-0002', '2026-03-25 10:31:00', 'return_request', 'novo', 'open')"
+            )
+        )
+        rows = conn.execute(text("SELECT protocol, summary FROM handoffs ORDER BY id")).all()
+    assert [tuple(r) for r in rows] == [
+        ("EMP-20260325-0001", "antigo"),
+        ("EMP-20260325-0002", "novo"),
+    ]

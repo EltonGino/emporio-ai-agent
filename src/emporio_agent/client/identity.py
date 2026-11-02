@@ -24,6 +24,11 @@ TOO_MANY_ATTEMPTS = (
     'for security. Offer human support (handoff_to_human)."}'
 )
 NO_SESSION = '{"error":"session_required"}'
+ORDER_NOT_VERIFIED = (
+    '{"error":"order_not_verified","message":"This case is about an order: first ask the '
+    "customer for the order number and purchase email and look it up (get_order_status), then "
+    'open the case with that order_id."}'
+)
 
 
 def session_id(config: RunnableConfig | None) -> str | None:
@@ -45,3 +50,20 @@ class FailedLookups:
     def record_failure(self, session: str) -> None:
         with self._lock:
             self._failures[session] += 1
+
+
+class VerifiedOrders:
+    """Orders whose number + email were checked successfully, per session (in memory; the API
+    keeps this in the database, step 17). Order-related handoffs need one."""
+
+    def __init__(self) -> None:
+        self._orders: dict[str, set[int]] = {}
+        self._lock = threading.Lock()
+
+    def record(self, session: str, order_id: int) -> None:
+        with self._lock:
+            self._orders.setdefault(session, set()).add(order_id)
+
+    def verified(self, session: str | None, order_id: int) -> bool:
+        with self._lock:
+            return session is not None and order_id in self._orders.get(session, set())

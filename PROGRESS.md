@@ -15,7 +15,8 @@ Update this file in the same commit as every plan step (see AGENTS.md §0 and §
 
 Step 15 — `test: routing and adversarial evals` (AGENTS.md §14; Decisions "Groq free-tier
 budget" item 7, "Official contacts" item 2, "Catalog search signals" item 2, the step 12
-quality notes and the routing gap under Known issues). `evals/routing_cases.yaml` (~10+
+quality notes, the routing gap under Known issues and **"Eval cases from the owner's manual
+CLI tests"** below). `evals/routing_cases.yaml` (~10+
 prompts → expected / forbidden tools, plus answer checks) and
 `evals/adversarial_cases.yaml` (5–8: prompt reveal, role override, other customer's email,
 wrong-email order lookup, injected instruction, contacts P1/P2). `@pytest.mark.llm`, skipped
@@ -40,7 +41,7 @@ temporary DB; pace calls to respect 8K TPM.
 | 11 | Store status, policy search, handoff | done | `feat(tools): store status, policy search and human handoff` (0ebaac7) |
 | 12 | Persona prompt + agent with memory | done | `feat(agent): persona prompt and tool-calling agent with memory` (1dd00d7); `fix(agent): return days left, 429 wait, invalid tool calls and prompt rules` (1a2986e); `feat(agent): protocol guard and idempotent handoff` (f2f29e9) |
 | 13 | Event stream + JSONL tracing | done | `feat(core): event stream and JSONL tracing` (f2d2ac8) |
-| 14 | CLI with debug mode | done | `feat(cli): interactive CLI with debug mode` |
+| 14 | CLI with debug mode | done | `feat(cli): interactive CLI with debug mode` (f8ea8e2); `fix(agent): price guard, alternatives, verified-order handoffs and promotions` |
 | 15 | Routing + adversarial evals | pending | |
 | 16 | CI workflow | pending | |
 | 17 | FastAPI (SSE, sessions, rate limit, retention, deletion) | pending | |
@@ -682,6 +683,45 @@ temporary DB; pace calls to respect 8K TPM.
   memory), `/exit` or Ctrl-D/Ctrl-C → quit.
 - **Step 14** — `build_chat_agent` is the single seam for tests: `tests/test_cli.py` swaps it
   for a scripted model (no LLM, no embeddings) and points `TRACES_DIR` to a temp dir.
+- **Manual CLI test fixes (owner, 2026-11-02)** — four problems found by the owner, fixed in
+  one commit:
+  1. *Invented products*: "e o Ibanez Bass 2X?" returned only `unavailable` and the model
+     invented 4 basses with prices. (a) `find_products` now returns **`alternatives`** when the
+     exact item can't be sold: up to 3 **available** products of the **same category**, closest
+     final price first, excluding items already in the results. (b) **Price check** in the
+     output guard (see below).
+  2. *"Tom called me Ana"*: investigated the owner's trace — the CLI **had** started a new
+     session (one uuid, only the owner's messages); "Ana" came from the prompt's complaint
+     example ("Sinto muito por essa demora, Ana."). Fixes: no names in prompt examples; rule
+     "use the first name only if it came from an order verified in this conversation". The
+     CLI banner now says "Nova conversa: <id> (para retomar: --session <id>)" or "Retomando a
+     conversa <id>"; without `--session` it never resumes (tested: two runs → two ids). The
+     CLI also silences the package's log records in the terminal (Python's last-resort
+     handler printed "429 on … next model"); they stay in `--debug` and the trace.
+  3. *Handoff without verification*: "Tô com um pedido atrasado" → `handoff_to_human(order_id
+     0, contact "")`. Now enforced in code: new reason **`return_request`**; reasons
+     `delayed_order`/`return_request` need an `order_id` **verified in this session** (a
+     successful `get_order_status`/`check_return_eligibility`), and any `order_id` given must be
+     verified; otherwise the tool returns `order_not_verified` telling the model to ask for
+     number + email first. 0 / "" mean "not given". `identity.VerifiedOrders` (in memory, per
+     session; **step 17: persist it in the DB** with the failure counter). SQLite dev
+     databases with the old `handoffs` CHECK are rebuilt keeping rows
+     (`loader.upgrade_handoffs_table`, called by `ensure_store_data`; production would use
+     Alembic).
+  4. *Incomplete promotions*: "tem ukulele em promoção?" → `search_products` (5 of 14 shown),
+     one promotion cited and "os demais com preço normal". Now: `list_active_promotions`
+     description says to use it for any promotion question before saying what is or isn't on
+     sale; `search_products` gained an **`on_promotion`** filter and its description says
+     "say nothing about items not shown"; prompt rules for both.
+- **Output guard generalized** — `ProtocolGuard` became `OutputGuard(checks)` with
+  `ProtocolCheck` and **`PriceCheck`**: every money amount in the final answer ("R$ 2.199,00",
+  "R$2199", "R$ 1.000", "500 reais") must appear in **this turn's** tool results (any number in
+  their JSON, pt-BR or plain) or in what the customer wrote in the conversation; otherwise the
+  model is re-asked once with a correction note naming the amounts, then a safe answer
+  ("não consegui confirmar esses valores…"). This also blocks computed amounts ("economia de
+  R$ 109,95") and prices recalled from earlier turns without a new lookup (stricter, by design:
+  the prompt already requires a tool call in the turn). Notice kind is now `output_guard` with
+  `failures: {check: [...]}`. Prompt grew to ≈ 1,350 tokens (chars/4) with these rules.
 - **Convention** — The "Commit" column holds the commit subject; hashes are in `git log`
   (a commit cannot contain its own hash).
 
@@ -719,6 +759,23 @@ temporary DB; pace calls to respect 8K TPM.
   `get_order_status`/`check_return_eligibility`, answer mentions 30 dias. If it fails, add a
   prompt line ("dúvida geral de política → search_policies; só depois ofereça verificar um
   pedido").
+- **Eval cases from the owner's manual CLI tests (owner, 2026-11-02) — add in step 15:**
+  (1) "tem o Giannini GF-3D?" then "e o Ibanez Bass 2X?" → only catalog products, alternatives
+  from the tool, no `output_guard` price failure in the final answer; (2) new session +
+  "Oi! Você sabe meu nome?" → no name in the answer (CLI session behaviour itself is covered by
+  `tests/test_cli.py`); (3) "Tô com um pedido atrasado" → no `handoff_to_human` before a
+  successful order lookup, asks for number + email; (4) "tem ukulele em promoção?" →
+  `list_active_promotions` (or `search_products` with `on_promotion`) and both Ohana CK-20 and
+  Kalani KAL-700T in the answer; plus the "defeito" routing case above.
+- **Re-run of the 4 scenarios (2026-11-02, Groq, temp DB)** — all four fixed: Ibanez → real
+  alternatives (Music Man Bass 4X R$ 7.157,00, Bass 1X, Yamaha Bass 3X); "pedido atrasado" →
+  asks for number + email, no handoff; ukulele promo → `list_active_promotions`, both items;
+  CLI twice without `--session` → two new ids, no name used. The guard also caught an invented
+  protocol ("EM-2026-0008") in the delayed-order turn. Still prompt-level only: after the order
+  was verified, the 20b opened the `delayed_order` case **without asking first** (allowed by
+  code since the order was verified; the confirmation then returned `already_registered`).
+  The 120b was rate limited with retry-after 150–937 s (daily quota close to exhausted after
+  the day's tests), so the 20b/qwen answered almost everything.
 - **README known limitation (owner, step 9):** installments are `total / n` rounded to cents,
   so n × installment can differ from the total by a few cents (e.g. 7 × R$ 314,14 =
   R$ 2.198,98 for R$ 2.199,00); a real checkout adjusts one installment. List it in README
@@ -958,3 +1015,15 @@ temporary DB; pace calls to respect 8K TPM.
   calculate_payment_options, "R$ 2.089,05 no PIX … até 12x sem juros de R$ 183,25", 7,450
   input tokens (2,560 cached), 3 calls on the 120b, 1.8 s; "Vocês vendem cordas?" → only
   instruments, asks if the customer wants an instrument, no tool call.
+
+### 2026-11-02 08:00 — Step 14 follow-up: fixes from the owner's manual CLI tests
+- Done: pushed step 14 (owner approval). Alternatives for unsellable items; `on_promotion`
+  filter and promotion descriptions/prompt; `OutputGuard` with protocol + price checks;
+  verified-order requirement for order handoffs (+ `return_request`, SQLite table upgrade);
+  prompt without example names; CLI session banner and silent package logs.
+- Files: `src/emporio_agent/core/guards.py`, `src/emporio_agent/client/{assistant,identity,
+  repository,tools}.py`, `src/emporio_agent/client/db/{models,loader}.py`,
+  `src/emporio_agent/client/prompts/system.md`, `src/emporio_agent/cli.py`,
+  `tests/test_{catalog,guards,agent,events,store_tools,db_loader,cli}.py`, `PROGRESS.md`.
+- Tests: ruff ok, format ok, `pytest -m "not llm"` 293 passed.
+- Live re-run: see Known issues "Re-run of the 4 scenarios".

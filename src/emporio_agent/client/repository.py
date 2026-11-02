@@ -35,6 +35,7 @@ SPEC_SEARCH_TERMS = {
     ("electronics", "yes"): "elétrico eletroacústico",
 }
 MAX_UNAVAILABLE_MATCHES = 3
+MAX_ALTERNATIVES = 3
 PROTOCOL_PREFIX = "EMP"
 PROTOCOL_ATTEMPTS = 3  # retries if two handoffs race for the same daily number
 
@@ -76,6 +77,7 @@ class ProductFilters:
     min_price: Decimal | None = None  # compared with the final (promotional) price
     max_price: Decimal | None = None
     only_available: bool = True
+    on_promotion: bool = False  # only products with an active promotion
 
 
 @dataclass(frozen=True)
@@ -86,6 +88,9 @@ class ProductSearch:
     # Partial match: no product has every query term; these terms are missing from some or
     # all of the results (e.g. ["preto"]), so the exact item is not in the catalog.
     unmatched_terms: list[str] = field(default_factory=list)
+    # When the requested item can't be sold: available products of the same category with the
+    # closest price, so the agent never has to invent replacements.
+    alternatives: list[ProductInfo] = field(default_factory=list)
 
     @property
     def partial_match(self) -> bool:
@@ -200,6 +205,20 @@ def _rank(terms: list[str], candidates: list[ProductInfo]) -> tuple[list[Product
     return products, unmatched
 
 
+def _alternatives(
+    wanted: ProductInfo, catalog: list[ProductInfo], already_shown: list[ProductInfo]
+) -> list[ProductInfo]:
+    """Available products of the wanted item's category, closest final price first."""
+    shown = {p.id for p in already_shown}
+    same_category = [
+        p
+        for p in catalog
+        if p.category == wanted.category and p.availability == "disponivel" and p.id not in shown
+    ]
+    same_category.sort(key=lambda p: (abs(p.final_price - wanted.final_price), p.id))
+    return same_category[:MAX_ALTERNATIVES]
+
+
 def _matching_categories(categories: list[Category], name: str) -> set[str]:
     """Categories whose name (or, failing that, description) matches every term."""
     terms = matching.query_terms(name)
@@ -240,8 +259,11 @@ class SqlStoreRepository:
     def find_products(self, filters: ProductFilters) -> ProductSearch:
         with Session(self._engine) as session:
             categories = list(session.scalars(select(Category).order_by(Category.category_id)))
-            candidates = self._products(session)
+            catalog = self._products(session)
 
+        candidates = catalog
+        if filters.on_promotion:
+            candidates = [p for p in candidates if p.promotion is not None]
         if filters.category:
             allowed = _matching_categories(categories, filters.category)
             candidates = [p for p in candidates if p.category in allowed]
@@ -266,7 +288,9 @@ class SqlStoreRepository:
                 unavailable = [p for p in matches if p.availability != "disponivel"]
             candidates = [p for p in candidates if p.availability == "disponivel"]
         products, unmatched = _rank(terms, candidates)
-        return ProductSearch(products, unavailable[:MAX_UNAVAILABLE_MATCHES], unmatched)
+        unavailable = unavailable[:MAX_UNAVAILABLE_MATCHES]
+        alternatives = _alternatives(unavailable[0], catalog, products) if unavailable else []
+        return ProductSearch(products, unavailable, unmatched, alternatives)
 
     def get_product(self, product_id: int) -> ProductInfo | None:
         with Session(self._engine) as session:

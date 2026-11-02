@@ -18,6 +18,7 @@ from langchain_core.tools import BaseTool, tool
 from pydantic import BaseModel, Field
 
 from emporio_agent.client import identity, matching
+from emporio_agent.client.db.models import ORDER_HANDOFF_REASONS
 from emporio_agent.client.repository import (
     OrderInfo,
     ProductFilters,
@@ -107,6 +108,7 @@ class SearchProductsArgs(BaseModel):
     min_price: float = Field(0, ge=0, description="BRL, final price")
     max_price: float = Field(0, ge=0, description="BRL, final price; 0 = no limit")
     only_available: bool = True
+    on_promotion: bool = Field(False, description="Only items with an active promotion")
     limit: int = Field(5, ge=1, le=10)
 
 
@@ -141,10 +143,17 @@ class PolicyQueryArgs(BaseModel):
 
 
 class HandoffArgs(BaseModel):
-    reason: Literal["complaint", "delayed_order", "manager_question", "unavailable_item", "other"]
+    reason: Literal[
+        "complaint",
+        "delayed_order",
+        "return_request",
+        "manager_question",
+        "unavailable_item",
+        "other",
+    ]
     summary: str = Field(min_length=10, max_length=600, description="For the team, in Portuguese")
     contact: str = Field("", max_length=120, description="Customer's own phone/email, if given")
-    order_id: int = Field(0, ge=0, description="Order number, if the case is about one")
+    order_id: int = Field(0, ge=0, description="Verified order number, if about an order")
 
 
 def br_datetime(value: datetime) -> str:
@@ -193,6 +202,7 @@ def build_tools(
     clock: Clock,
     retriever: Retriever,
     failed_lookups: identity.FailedLookups | None = None,
+    verified_orders: identity.VerifiedOrders | None = None,
 ) -> list[BaseTool]:
     payments = client.payments
     calendar = HolidayCalendar(client.store.holidays)
@@ -200,6 +210,7 @@ def build_tools(
         WEEKDAY_NAMES[i]: hours_text(client.store.hours[day]) for i, day in enumerate(WEEKDAYS)
     } | {"feriados": "fechado"}
     failed_lookups = failed_lookups or identity.FailedLookups()
+    verified_orders = verified_orders or identity.VerifiedOrders()
 
     def identified_order(order_id: int, email: str, config: RunnableConfig) -> OrderInfo | str:
         """The order, or the error JSON to return. Same error for unknown order / wrong email."""
@@ -212,6 +223,7 @@ def build_tools(
         if order is None:
             failed_lookups.record_failure(session)
             return identity.ORDER_NOT_FOUND
+        verified_orders.record(session, order.order_id)  # allows order-related handoffs
         return order
 
     accessory_terms = matching.document_terms(" ".join(client.catalog.non_sold_accessories))
@@ -227,11 +239,13 @@ def build_tools(
         min_price: float = 0,
         max_price: float = 0,
         only_available: bool = True,
+        on_promotion: bool = False,
         limit: int = 5,
     ) -> str:
-        """Catalog search (price, promotion, availability, alternatives); use for any product
-        question. availability: disponivel | esgotado | descontinuado | em_breve (not for sale
-        yet). unavailable = exact matches not for sale now → offer alternatives. partial_match =
+        """Catalog search (price, promotion, availability); use for any product question.
+        Shows `limit` of total_matches: say nothing about items not shown. availability:
+        disponivel | esgotado | descontinuado | em_breve (not for sale yet). unavailable =
+        exact matches not for sale now; offer only the returned alternatives. partial_match =
         exact item not in the catalog (unmatched_terms); results are only similar.
         possible_accessory_query = asks for an accessory the store doesn't sell."""
         filters = ProductFilters(
@@ -240,6 +254,7 @@ def build_tools(
             min_price=_limit(min_price),
             max_price=_limit(max_price),
             only_available=only_available,
+            on_promotion=on_promotion,
         )
         # Not blocking: "violão 7 cordas" is a valid instrument search.
         accessory = (
@@ -261,6 +276,8 @@ def build_tools(
                 {"id": p.id, "name": p.name, "availability": p.availability}
                 for p in found.unavailable
             ]
+        if found.alternatives:
+            result["alternatives"] = [product_summary(p) for p in found.alternatives]
         return to_json(result | accessory)
 
     @tool(args_schema=ProductIdArgs)
@@ -284,7 +301,9 @@ def build_tools(
 
     @tool
     def list_active_promotions() -> str:
-        """Promotions active now. Any other (e.g. a past Black Friday) is not active."""
+        """All promotions active now, any category. Use for any promotion/discount question
+        before saying what is or isn't on sale. Any other (e.g. a past Black Friday) is not
+        active."""
         return to_json({"promotions": [product_summary(p) for p in repo.list_active_promotions()]})
 
     @tool(args_schema=PaymentArgs)
@@ -462,15 +481,22 @@ def build_tools(
         contact: str = "",
         order_id: int = 0,
     ) -> str:
-        """Open a case for the human team; returns the protocol. For complaints, confirmed
-        return requests, delayed orders and questions the manual can't answer. The same
-        case again in this conversation returns the existing protocol."""
+        """Open a case for the human team; returns the protocol. Ask the customer first
+        (complaints can be registered directly). delayed_order and return_request need an
+        order already looked up with number + email in this conversation. The same case again
+        returns the existing protocol."""
+        session = identity.session_id(config)
+        # 0 / "" mean "not given". An order (required for order reasons) must be verified.
+        if (reason in ORDER_HANDOFF_REASONS or order_id) and not verified_orders.verified(
+            session, order_id
+        ):
+            return identity.ORDER_NOT_VERIFIED
         now = clock.now()
         result = repo.create_handoff(
             reason,
             summary,
-            contact or None,
-            identity.session_id(config),
+            contact.strip() or None,
+            session,
             created_at=now,
             order_id=order_id or None,
         )
