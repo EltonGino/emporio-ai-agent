@@ -53,7 +53,13 @@ def main() -> int:
             result = run_case(case, factory, args.pace)
             results.append(result)
             status = "PASS" if result.passed else "FAIL"
-            print(f"{status}  {case.id:<42} tools={result.transcript.tools}")
+            t = result.transcript
+            limits = sum(n.get("kind") == "rate_limit" for n in t.notices)
+            print(
+                f"{status}  {case.id:<42} tokens_in={t.input_tokens:<6} 429s={limits} "
+                f"tools={t.tools}",
+                flush=True,
+            )
             for failure in result.failures:
                 print(f"      - {failure}")
             if not result.passed:
@@ -61,7 +67,14 @@ def main() -> int:
 
     passed = sum(r.passed for r in results)
     model = args.llm_model or settings.llm_model
+    total_tokens = sum(r.transcript.input_tokens for r in results)
+    turns = sum(len(r.case.turns) for r in results)
+    limits = sum(n.get("kind") == "rate_limit" for r in results for n in r.transcript.notices)
     print(f"\n{passed}/{len(results)} passed on {model}")
+    print(
+        f"input tokens: {total_tokens} over {turns} turns (≈ {total_tokens // max(turns, 1)}/turn)"
+    )
+    print(f"rate-limit notices (429): {limits}")
     REPORTS.mkdir(parents=True, exist_ok=True)
     report = REPORTS / f"report-{datetime.now():%Y%m%d-%H%M%S}.json"
     report.write_text(

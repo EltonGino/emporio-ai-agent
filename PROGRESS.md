@@ -43,7 +43,7 @@ then 21, then running the step 15 evals on Groq.
 | 17 | FastAPI (SSE, sessions, rate limit, retention, deletion) | pending | |
 | 18 | Frontend scaffold | done | `feat(frontend): Vite React scaffold` (d8dbbdc) |
 | 19 | Chat UI with streaming | done (mock API; real API in step 17) | `feat(frontend): customer service chat with streaming` (4ae5145) |
-| 20 | Bastidores panel + simulated date banner | done (mock API) | `feat(frontend): demo-mode behind-the-scenes panel and simulated date banner` |
+| 20 | Bastidores panel + simulated date banner | done (mock API) | `feat(frontend): demo-mode behind-the-scenes panel and simulated date banner` (1979f10); `fix(agent): refusals in Tom's voice` |
 | 21 | Serve frontend from API, Docker | pending | |
 | 22 | Recorded example conversations | pending | |
 | 23 | README | pending | |
@@ -821,6 +821,19 @@ then 21, then running the step 15 evals on Groq.
   `-3-devolucao`, `-4-seguranca`) and phone 390×844 @2x (`mobile-1-inicio`, `-2-chat`,
   `-3-bastidores-gaveta`). Chrome's minimum headless window is 500 px, so phone shots render
   the app in a 390 px iframe and crop (sips) — true phone layout.
+- **CI first run (2026-11-02, after the owner pushed the overnight commits)** — run
+  41449378661: all three jobs green (fast: 334 passed; embeddings: cache miss → model
+  downloaded and cached, 1 passed; frontend build ok).
+- **Refusals in Tom's voice (owner review, 2026-11-02)** — prompt rule: when refusing, stay
+  Tom (friendly sentence, never "não posso atender a essa solicitação" / "não tenho acesso a
+  esses dados"), give the reason simply and always offer what Tom can do; a third party's
+  order → explain that, for security, orders are looked up only with order number + purchase
+  e-mail, and offer that. Evals: new expectation `persona_refusal` (no `ROBOTIC_PHRASES`, at
+  least one `OFFER_PHRASES` in the last answer) on the 7 refusal cases; `lookup_by_customer_name`
+  now also requires "número do pedido" + e-mail; new case `lookup_by_another_name`. Demo chip:
+  the tester's stray "”" is fixed in `export_demo_fixtures.py` (`USER_TEXT_FIXES`), fixtures
+  regenerated. `scripts/run_evals.py` prints input tokens and 429 notices per case and in
+  total. `evals_resultado.txt` (local run output) is gitignored.
 - **Convention** — The "Commit" column holds the commit subject; hashes are in `git log`
   (a commit cannot contain its own hash).
 
@@ -1180,3 +1193,11 @@ then 21, then running the step 15 evals on Groq.
 - Checks: `npm run build` ok, `npm run lint` ok; mock build verified in headless Chrome
   (desktop and 390 px phone), screenshots in `frontend/screenshots/`.
 - Stopped here (owner instruction): step 17 and 21 not started; nothing pushed.
+
+### 2026-11-02 10:20 — Refusal tone, third-party order case, demo chip typo (owner review)
+- Done: prompt refusal rule; `persona_refusal` eval check + cases; chip typo fixed at the
+  export script; eval script token/429 totals.
+- Files: `src/emporio_agent/client/prompts/system.md`, `src/emporio_agent/core/evals.py`,
+  `evals/adversarial_cases.yaml`, `scripts/{run_evals,export_demo_fixtures}.py`,
+  `frontend/src/mocks/conversations.json`, `tests/test_evals.py`, `.gitignore`, `PROGRESS.md`.
+- Tests: ruff ok, format ok, `pytest -m "not llm"` 342 passed; `npm run build` ok.

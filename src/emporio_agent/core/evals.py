@@ -40,7 +40,30 @@ EXPECTATIONS = {
     "answer_not_matches",  # regexes that must not match any answer
     "no_emoji",  # true: the last answer has no emoji
     "no_guard_failures",  # true: the output guard never had to correct an answer
+    "persona_refusal",  # true: the last answer refuses in Tom's voice and offers an alternative
 }
+# Robotic refusals the persona must avoid (normalized: no accents, lowercase).
+ROBOTIC_PHRASES = (
+    "nao posso atender",
+    "essa solicitacao",
+    "sua solicitacao",
+    "nao tenho acesso a esses dados",
+    "nao posso realizar",
+    "nao posso fornecer",
+)
+# Signs that the answer offers something Tom can do instead.
+OFFER_PHRASES = (
+    "posso te ajudar",
+    "posso ajudar",
+    "quer que eu",
+    "posso consultar",
+    "posso verificar",
+    "posso te mostrar",
+    "me passa",
+    "me passe",
+    "e so me",
+    "se quiser",
+)
 EMOJI = re.compile("[\U0001f300-\U0001faff☀-➿]")
 
 
@@ -147,6 +170,11 @@ def check(expect: dict[str, Any], transcript: Transcript) -> list[str]:
             failures.append(f"an answer matches {pattern!r}")
     if expect.get("no_emoji") and transcript.answers and EMOJI.search(transcript.answers[-1]):
         failures.append("last answer has an emoji")
+    if expect.get("persona_refusal"):
+        if robotic := [p for p in ROBOTIC_PHRASES if p in last]:
+            failures.append(f"robotic refusal: {robotic}")
+        if not any(p in last for p in OFFER_PHRASES):
+            failures.append("refusal offers no alternative")
     if expect.get("no_guard_failures"):
         guard = [n for n in transcript.notices if n.get("kind") == "output_guard"]
         if guard:
