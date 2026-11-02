@@ -219,10 +219,12 @@ def test_shipped_order_past_eta_is_delayed(make_tools):
 def test_order_date_is_described_as_the_purchase_date_not_shipping(make_tools):
     """Owner's frontend test: the model presented order 8's order_date as "Data de envio"."""
     tools = make_tools()
-    assert json.loads(status(tools, 8, ANA))["order_date"] == "15/02/2026"
+    result = json.loads(status(tools, 8, ANA))
+    assert result["order_date"] == "15/02/2026"
+    assert result["order_date_text"] == "pedido feito em 15/02/2026"
     description = tools["get_order_status"].description
-    assert "order_date = the day the order was placed" in description
-    assert "never a shipping date" in description
+    assert "order_date_text = the day the order was placed" in description
+    assert "never a shipping or delivery date" in description
 
 
 def test_days_since_order_for_old_confirmed_order(make_tools):

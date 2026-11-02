@@ -1777,7 +1777,7 @@ one customer per conversation). One local commit per fix, no push. Steps 22/23 r
   binding (`repo.forget_session`; API test). Prompt: with `other_customer`, explain kindly
   that each conversation serves one person and suggest a new conversation (or, if the order
   is theirs, to check the data); never say whether the order exists. Without this line the
-  20b followed the older "peça para conferir os dois" (live: 0/2 runs explained it).
+  20b followed the older "peça para conferir os dois" (live: 0/4 refusals explained it).
   Tests: binding, refusal identity, same customer, new session, return tool, lockout,
   handoff for a refused order, in-memory/DB check-and-set, deletion. Changed test:
   `test_shared_email_only_opens_orders_of_its_own_customer` does its second lookup in a
@@ -1794,4 +1794,16 @@ one customer per conversation). One local commit per fix, no push. Steps 22/23 r
   identified by the channel's own phone number (the `customers` table has the phone), like a
   logged-in customer, so order number + e-mail would no longer be needed; the binding here
   is the same idea within a web chat that has no login.
+- **4b. Order date, follow-up (fix 4 was not enough).** Fix 6's runs showed the 20b still
+  relabelling `order_date`: "📅 Enviado em 15/02/2026" (order 8), "entregue em 15/10/2025"
+  (order 1, delivered; there is no delivery date either). Measured with a scratch script
+  (one fresh conversation per order 8/1/19/9 per run, lines with the order date, label in the
+  ~20 chars before it, "feito" exempt). Description only (fix 4): **4 of 11 mentions
+  mislabelled**. Variants: `order_date` + **`order_date_text: "pedido feito em dd/mm/aaaa"`**
+  (ready phrase, like `status_text`) **4 of 19**; phrase only (no bare date) 1 of 3. Chosen:
+  `order_date` + `order_date_text`, and the description now says "never a shipping or
+  delivery date: the data has neither". **Still not reliable on the 20b (≈ 1 in 5 mentions;
+  temperature 0.2 repeats the same wording).** Proposal for the owner, not implemented: a
+  deterministic output check (an order's date from this turn's `get_order_status`, preceded
+  by envio/entrega/despacho → correction note and retry), like the other guards.
 

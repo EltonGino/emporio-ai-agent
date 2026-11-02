@@ -403,8 +403,8 @@ def build_tools(
     @tool(args_schema=OrderLookupArgs)
     def get_order_status(config: RunnableConfig, order_id: int = 0, email: str = "") -> str:
         """The customer's own order. Call only with the order number and purchase email the
-        customer gave. order_date = the day the order was placed (data do pedido), never a
-        shipping date: there is no shipping date.
+        customer gave. order_date / order_date_text = the day the order was placed, never a
+        shipping or delivery date: the data has neither.
         estimated_delivery is a forecast; days_since_order counts from the purchase. delayed
         (see days_since_estimated_delivery) or long pending/confirmed → acknowledge the wait,
         offer the team, never invent dates."""
@@ -419,6 +419,8 @@ def build_tools(
             "status": order.status,
             "status_text": ORDER_STATUS_TEXT[order.status],
             "order_date": br_date(order.order_date),
+            # Ready phrase: the 20b called the bare date "Data de envio" / "entregue em".
+            "order_date_text": f"pedido feito em {br_date(order.order_date)}",
             "days_since_order": (today - order.order_date).days,
             "items": [{"name": i.name, "quantity": i.quantity} for i in order.items],
             **money("total", order.total),  # amount paid (D4)
