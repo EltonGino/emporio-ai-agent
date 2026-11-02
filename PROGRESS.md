@@ -13,10 +13,9 @@ Update this file in the same commit as every plan step (see AGENTS.md §0 and §
 
 ## Next step
 
-**Feature freeze (owner, 2026-11-02): from now on only bug fixes.** Stop for the owner's
-review before the README. Pending: step 22 (recorded example conversations, gpt-oss-120b on
-Groq per the quota plan) and step 23 (README; the security notes, eval caveats and known
-limitations to include are recorded under Decisions and in the last log entries).
+**Stop for the owner's review of the README draft** (local commit, not pushed). Feature freeze:
+only bug fixes. After the review: step 22 (recorded example conversations on gpt-oss-120b),
+then fill the README TODOs (example links, video link, final 120b eval run).
 
 ## Plan status
 
@@ -44,7 +43,7 @@ limitations to include are recorded under Decisions and in the last log entries)
 | 20 | Bastidores panel + simulated date banner | done (mock API) | `feat(frontend): demo-mode behind-the-scenes panel and simulated date banner` (1979f10); `fix(agent): refusals in Tom's voice` (3515048); `fix(agent): refusal examples, phrase guard, optional order data, injection rule` (30f7830); `test: eval reports tool args and guard interventions as a metric` (eb89dce); `test: injected-instruction criterion and pending eval re-runs` (d67afd5) |
 | 21 | Serve frontend from API, Docker | done | `build: serve frontend from API, Dockerfile and compose` |
 | 22 | Recorded example conversations | pending | |
-| 23 | README | pending | |
+| 23 | README | draft (TODOs: step 22 links, video, final 120b eval run) | `docs: README draft` |
 
 ## Verified facts ([VERIFY] items resolved)
 
@@ -1888,4 +1887,24 @@ limitations to include are recorded under Decisions and in the last log entries)
 - Eval: `persona_refusal` offer list gains **"me informe"** (owner): "Verifique… e me
   informe novamente" offers a way forward; `order_lookup_with_another_customers_email`
   had failed on it once (a false failure of the check, like "me envie" before). Test added.
+- **README draft** (`README.md`, English, AGENTS.md §17 structure plus the owner's sections:
+  Agent evaluation, Output guards, Scaling). Every number from this file (retrieval table of
+  step 7, 120b eval 21/28 and the 3/7 re-run, local 20b regression 23/28 kept separate, guard
+  cases, token measurements); TODOs only for step 22 links, the video and the final 120b eval
+  run. Screenshots copied to `docs/images/` (versioned): `web-demo-mode.png` (was
+  `vintage-ajustes-desktop.png`), `web-customer-mode.png` (`vintage-desktop-cliente.png`),
+  `mobile.png` (`vintage-ajustes-mobile.png`).
+- **Quickstart verified by running it** (no Groq calls): `uv sync --frozen`; `emporio-chat
+  --help`; `scripts/eval_retrieval.py` reproduces the step 7 table exactly; CLI on Ollama with
+  piped input (`--provider ollama --model gpt-oss:20b --now … --debug`): GD20 → R$ 2.089,05 no
+  PIX; `scripts/run_evals.py --llm-provider ollama` (earlier today); **`docker compose up
+  --build`** with a separate project name and a scratch override (Ollama by Tailscale IP,
+  `DEMO_MODE=true`, `AGENT_NOW`): image rebuilt, health/config/frontend served, chat SSE with
+  tool events, product card and the right answer; stack and its volumes removed afterwards
+  (`down -v`, only that project). Port 8000 on the host was already taken by a local
+  `emporio-api` from this repo's venv (left running), so the check ran inside the container.
+  Not run: `ollama pull` (server already has the model), `npm run dev`.
+- Facts corrected while checking the draft: the persona prompt is now ≈ 1,750 tokens
+  (chars/4; 1,150 at the step 12 measurement); `scripts/record_conversations.py` doesn't exist
+  yet (step 22), so the README makes no claim about per-example dates.
 
