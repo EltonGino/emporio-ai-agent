@@ -37,14 +37,47 @@ from emporio_agent.core.retrieval.base import Retriever
 GROQ_FALLBACK_RETRIES = 0  # a 429 moves on to the next model at once
 GROQ_LAST_MODEL_RETRIES = 2  # the last model waits through the SDK's backoff
 
+# Safe answers (what the guard shows when a corrected answer still fails) exist in the three
+# languages Tom speaks; `localized` picks one with the language hint's detection (owner).
 SAFE_PROTOCOL_ANSWER = (
     "Desculpe, me confundi aqui: ainda não registrei nenhum chamado. "
     "Quer que eu registre seu caso com a equipe agora para gerar o protocolo?"
 )
+SAFE_PROTOCOL_ANSWERS = {
+    "pt": SAFE_PROTOCOL_ANSWER,
+    "en": "Sorry, I got mixed up: I haven't registered any case yet. Would you like me to "
+    "register it with the team now to get a protocol number?",
+    "es": "Disculpa, me confundí: todavía no registré ningún caso. ¿Quieres que lo registre "
+    "ahora con el equipo para generar el protocolo?",
+}
+REGISTERED_PROTOCOL = {
+    "pt": (
+        "Desculpe, me confundi ao informar o protocolo.",
+        "Seu chamado já está registrado com o protocolo **{}**.",
+        "Os protocolos registrados nesta conversa são: {}.",
+    ),
+    "en": (
+        "Sorry, I got the protocol number wrong.",
+        "Your case is already registered under protocol **{}**.",
+        "The protocols registered in this conversation are: {}.",
+    ),
+    "es": (
+        "Disculpa, me equivoqué con el número de protocolo.",
+        "Tu caso ya está registrado con el protocolo **{}**.",
+        "Los protocolos registrados en esta conversación son: {}.",
+    ),
+}
 SAFE_PRICE_ANSWER = (
     "Desculpe, não consegui confirmar esses valores agora. "
     "Quer que eu consulte o catálogo de novo pra você?"
 )
+SAFE_PRICE_ANSWERS = {
+    "pt": SAFE_PRICE_ANSWER,
+    "en": "Sorry, I couldn't confirm those prices right now. Would you like me to check the "
+    "catalog again?",
+    "es": "Disculpa, no pude confirmar esos valores ahora. ¿Quieres que consulte el catálogo "
+    "de nuevo?",
+}
 
 
 # Robotic refusals seen in evals; they break Tom's persona (manual §7.1).
@@ -56,18 +89,36 @@ SAFE_REFUSAL_ANSWER = (
     "Isso eu não consigo fazer por aqui 😊 Mas posso te ajudar com instrumentos, preços, "
     "formas de pagamento, pedidos ou trocas. O que você precisa?"
 )
+SAFE_REFUSAL_ANSWERS = {
+    "pt": SAFE_REFUSAL_ANSWER,
+    "en": "That's something I can't do here 😊 But I can help you with instruments, prices, "
+    "payment options, orders or returns. What do you need?",
+    "es": "Eso no lo puedo hacer por aquí 😊 Pero puedo ayudarte con instrumentos, precios, "
+    "formas de pago, pedidos o cambios. ¿Qué necesitas?",
+}
+
+
+def customer_language(messages: Sequence[AnyMessage]) -> str:
+    """ "en"/"es" when the last customer message is clearly in that language, else "pt"."""
+    last = next((m for m in reversed(messages) if isinstance(m, HumanMessage)), None)
+    return (detect_language(last.text) if last else None) or "pt"
+
+
+def localized(answers: dict[str, str]) -> Callable[[Sequence[AnyMessage]], str]:
+    """A safe answer in the language of the customer's last message."""
+    return lambda history: answers[customer_language(history)]
 
 
 def safe_protocol_answer(history: Sequence[AnyMessage]) -> str:
+    language = customer_language(history)
     protocols = sorted(issued_protocols(history, "handoff_to_human"))
     if not protocols:
-        return SAFE_PROTOCOL_ANSWER
+        return SAFE_PROTOCOL_ANSWERS[language]
+    sorry, one, many = REGISTERED_PROTOCOL[language]
     registered = (
-        f"Seu chamado já está registrado com o protocolo **{protocols[0]}**."
-        if len(protocols) == 1
-        else f"Os protocolos registrados nesta conversa são: {', '.join(protocols)}."
+        one.format(protocols[0]) if len(protocols) == 1 else many.format(", ".join(protocols))
     )
-    return f"Desculpe, me confundi ao informar o protocolo. {registered}"
+    return f"{sorry} {registered}"
 
 
 def phrase_correction_note(found: set[str]) -> str:
@@ -137,6 +188,13 @@ SAFE_PAYMENT_ANSWER = (
     "Pra te passar as condições de pagamento certinhas, me diz qual instrumento você quer "
     "que eu calculo o PIX e as parcelas pra você 😊"
 )
+SAFE_PAYMENT_ANSWERS = {
+    "pt": SAFE_PAYMENT_ANSWER,
+    "en": "To give you the exact payment conditions, tell me which instrument you want and "
+    "I'll work out the PIX price and the installments for you 😊",
+    "es": "Para darte las condiciones de pago exactas, dime qué instrumento quieres y calculo "
+    "el precio por PIX y las cuotas 😊",
+}
 
 
 def payment_correction_note(_: set[str]) -> str:
@@ -170,7 +228,7 @@ def output_guard() -> OutputGuard:
             ),
             PriceCheck(
                 correction_note=price_correction_note,
-                safe_answer=SAFE_PRICE_ANSWER,
+                safe_answer=localized(SAFE_PRICE_ANSWERS),
                 forced_tools=CATALOG_PAYMENT_TOOLS,
             ),
             TopicToolCheck(
@@ -180,7 +238,7 @@ def output_guard() -> OutputGuard:
                 amounts_are_details=False,
                 tools=PAYMENT_TOOLS,
                 correction_note=payment_correction_note,
-                safe_answer=SAFE_PAYMENT_ANSWER,
+                safe_answer=localized(SAFE_PAYMENT_ANSWERS),
                 name="payment_tool",
                 forced_tools=CATALOG_PAYMENT_TOOLS,
             ),
@@ -190,14 +248,14 @@ def output_guard() -> OutputGuard:
                 tools=PAYMENT_TOOLS,
                 evidence_fields=PIX_EVIDENCE_FIELDS,
                 correction_note=pix_correction_note,
-                safe_answer=SAFE_PAYMENT_ANSWER,
+                safe_answer=localized(SAFE_PAYMENT_ANSWERS),
                 name="pix_value",
                 forced_tools=CATALOG_PAYMENT_TOOLS,
             ),
             PhraseCheck(
                 patterns=ROBOTIC_PATTERNS,
                 correction_note=phrase_correction_note,
-                safe_answer=SAFE_REFUSAL_ANSWER,
+                safe_answer=localized(SAFE_REFUSAL_ANSWERS),
                 name="robotic_phrase",
             ),
         ],
@@ -269,14 +327,18 @@ def render_system_prompt(client: ClientConfig) -> str:
 LANGUAGE_WORDS = {
     "pt": {"voce", "voces", "tem", "quero", "qual", "quais", "quanto", "um", "uma", "nao",
            "e", "meu", "minha", "pra", "com", "obrigado", "obrigada", "oi", "ola", "vendem",
-           "onde", "quando", "preco", "sim", "isso", "esse", "essa", "tambem", "gostaria"},
-    "en": {"the", "and", "you", "your", "do", "does", "have", "has", "about", "what", "which",
+           "onde", "quando", "preco", "sim", "isso", "esse", "essa", "tambem", "gostaria",
+           "o", "do", "da", "dos", "das", "quem", "ontem"},
+    "en": {"the", "and", "you", "your", "does", "have", "has", "about", "what", "which",
            "how", "is", "are", "can", "my", "i", "want", "any", "for", "with", "please", "hi",
-           "hello", "thanks", "price", "much", "sell", "where", "when", "there"},
+           "hello", "thanks", "price", "much", "sell", "where", "when", "there", "show",
+           "tell", "need", "would", "could", "like", "buy", "it", "of", "this", "that"},
     "es": {"tienen", "tiene", "tienes", "hola", "quiero", "cuanto", "cuesta", "cuales",
            "usted", "ustedes", "gracias", "puedo", "hay", "los", "las", "el", "y", "es", "son",
            "mi", "venden", "donde", "cuando", "precio", "necesito", "busco", "electricas",
-           "electrica", "electrico", "tambien", "algun", "alguna"},
+           "electrica", "electrico", "tambien", "algun", "alguna", "puedes", "puede",
+           "pueden", "tus", "sus", "mis", "quieres", "necesitas", "hacer", "ayuda", "una",
+           "un", "del", "pero", "muy", "ahora", "soy", "eres"},
 }  # fmt: skip
 # Written in the target language: closer to what the model must produce than a Portuguese rule.
 LANGUAGE_HINTS = {
@@ -300,8 +362,7 @@ def detect_language(text: str) -> str | None:
 
 def language_hint(messages: Sequence[AnyMessage]) -> str:
     """Hint for an English/Spanish last customer message ("" for Portuguese or unclear)."""
-    last = next((m for m in reversed(messages) if isinstance(m, HumanMessage)), None)
-    return LANGUAGE_HINTS.get(detect_language(last.text) if last else None, "")
+    return LANGUAGE_HINTS.get(customer_language(messages), "")
 
 
 def context_provider(client: ClientConfig, clock: Clock):

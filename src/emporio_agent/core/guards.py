@@ -171,7 +171,7 @@ def cited_amounts(answer: str) -> dict[Decimal, str]:
 @dataclass
 class PriceCheck:
     correction_note: Callable[[set[str]], str]
-    safe_answer: str
+    safe_answer: SafeAnswer
     name: str = "price"
     forced_tools: Sequence[str] = ()
 
@@ -230,7 +230,7 @@ class TopicToolCheck:
     detail_words: Sequence[str]
     tools: Sequence[str]
     correction_note: Callable[[set[str]], str]
-    safe_answer: str
+    safe_answer: SafeAnswer
     name: str = "topic"
     evidence_fields: Sequence[str] = ()
     detail_patterns: Sequence[str] = ()  # regexes over the normalized text
@@ -270,7 +270,7 @@ class PhraseCheck:
 
     patterns: Sequence[str]
     correction_note: Callable[[set[str]], str]
-    safe_answer: str
+    safe_answer: SafeAnswer
     name: str = "phrase"
 
     def problems(self, answer: str, history: Sequence[AnyMessage]) -> set[str]:
