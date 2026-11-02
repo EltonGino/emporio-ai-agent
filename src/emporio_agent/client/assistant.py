@@ -170,7 +170,14 @@ PAYMENT_TOPIC_WORDS = (
 )
 PAYMENT_DETAIL_WORDS = ("juros", "vezes", "à vista", "compensa", "mínim", "dias úteis", "%")
 PAYMENT_DETAIL_PATTERNS = (r"\b\d{1,2} ?x\b",)  # "12x", "3 x"
-PAYMENT_TOOLS = ("calculate_payment_options", "get_product_details", "search_policies")
+# get_order_status: an order's own payment method ("cartão de crédito em 6x") is a looked-up
+# fact (video rehearsal: correct order answers were replaced by the payment safe answer).
+PAYMENT_TOOLS = (
+    "calculate_payment_options",
+    "get_product_details",
+    "search_policies",
+    "get_order_status",
+)
 # PIX: a product search returns pix_price, so citing that exact amount is accepted too.
 PIX_DETAIL_WORDS = ("desconto", "%")
 PIX_EVIDENCE_FIELDS = ("pix_price", "pix_total")

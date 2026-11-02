@@ -244,6 +244,13 @@ def flagged(answer: str, *results: ToolMessage) -> bool:
         ("O desconto do PIX não vale em promoção.", [tool_result("search_policies")], False),
         ("Posso te ajudar com formas de pagamento também!", [], False),  # no figures/rules
         ("O GD20 sai por R$ 2.199,00.", [SEARCH], False),  # not about payment
+        # Video rehearsal (20b): order 9's own payment method, from the lookup.
+        (
+            "Total: **R$ 349,90** (cartão de crédito em 6x).",
+            [tool_result("get_order_status", '{"payment_method":"cartão de crédito em 6x"}')],
+            False,
+        ),
+        ("Total: R$ 349,90 (cartão de crédito em 6x).", [], True),  # no lookup in the turn
     ],
 )
 def test_payment_answers_need_a_payment_tool_or_the_tools_pix_value(answer, results, expected):

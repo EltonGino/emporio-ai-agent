@@ -1980,4 +1980,15 @@ the step 22 log entry), the video, the final eval run if quota is left, README T
   Eval case `order_data_in_a_follow_up_phrase` (routing, exact phrase, fresh session: lookup
   of order 9, its status in the answer). Live (Ollama 20b, 4 runs): the lookup now happens
   **4/4**, but the case failed 4/4 on the next bug (2), fixed in the following commit.
+- **2. Payment-check false positive (found by fix 1's eval case).** Once order 9 was looked up,
+  every answer cited its payment method, "cartão de crédito em 6x" (topic "cartão de crédito" +
+  detail "6x"), and the payment check (`payment_tool`) required a payment tool: correct order
+  answers were held back twice and the customer got the payment safe answer. `get_order_status`
+  joined `PAYMENT_TOOLS` (an order's own payment method is a looked-up fact). Tests: the
+  rehearsal phrase passes with the lookup, still flagged without it. Live (Ollama 20b):
+  `order_data_in_a_follow_up_phrase` **4/4**; the model called the tool by itself in all 8
+  fresh-session runs (the rehearsal failure was mid-conversation), so the forced path was
+  checked with the scratch script that replaces only the first answer with the rehearsal's
+  ("me passa o número do pedido e o e-mail"): **3/3 forced retries called `get_order_status`
+  with order 9 and the e-mail**, and the answers with "cartão de crédito em 6x" passed.
 
