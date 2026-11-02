@@ -16,10 +16,36 @@ from emporio_agent.client.tools import br_datetime, build_tools
 from emporio_agent.clock import Clock
 from emporio_agent.config import ClientConfig, Settings
 from emporio_agent.core.agent import build_agent
+from emporio_agent.core.guards import ProtocolGuard
 from emporio_agent.core.retrieval.base import Retriever
 
 GROQ_FALLBACK_RETRIES = 0  # a 429 moves on to the next model at once
 GROQ_LAST_MODEL_RETRIES = 2  # the last model waits through the SDK's backoff
+
+SAFE_PROTOCOL_ANSWER = (
+    "Desculpe, me confundi aqui: ainda não registrei nenhum chamado. "
+    "Quer que eu registre seu caso com a equipe agora para gerar o protocolo?"
+)
+
+
+def protocol_correction_note(invalid: set[str]) -> str:
+    codes = ", ".join(sorted(invalid))
+    return (
+        "## Correção obrigatória\n"
+        f"Sua resposta anterior citou como protocolo {codes}, que não foi gerado por "
+        "handoff_to_human nesta conversa. Responda de novo sem esse número. Só informe "
+        "protocolos devolvidos por handoff_to_human; se o caso ainda não foi registrado, "
+        "pergunte se o cliente quer registrar."
+    )
+
+
+def protocol_guard() -> ProtocolGuard:
+    return ProtocolGuard(
+        tool_name="handoff_to_human",
+        keywords=("protocolo", "protocol"),  # also English/Spanish answers
+        correction_note=protocol_correction_note,
+        safe_answer=SAFE_PROTOCOL_ANSWER,
+    )
 
 
 def make_chat_model(name: str, settings: Settings, last: bool) -> BaseChatModel:
@@ -101,4 +127,5 @@ def build_store_agent(
         settings.history_max_messages,
         settings.history_max_tokens,
         settings.rate_limit_max_wait_seconds,
+        guards=[protocol_guard()],
     )

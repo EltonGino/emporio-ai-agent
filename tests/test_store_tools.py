@@ -131,14 +131,14 @@ def test_search_policies_description_asks_for_rewritten_query(make_tools):
 # --- handoff -------------------------------------------------------------------------------
 
 
-def handoff(tools, **args):
+def handoff(tools, session_name="s1", **args):
     args = {"reason": "complaint", "summary": "Cliente reclama do atraso do pedido 8."} | args
-    return json.loads(tools["handoff_to_human"].invoke(args, config=session()))
+    return json.loads(tools["handoff_to_human"].invoke(args, config=session(session_name)))
 
 
 def test_handoff_protocol_format_and_daily_sequence(make_tools):
     tools = make_tools("2026-03-25T10:30")
-    first, second = handoff(tools), handoff(tools)
+    first, second = handoff(tools, order_id=8), handoff(tools, order_id=9)
     assert re.fullmatch(r"EMP-\d{8}-\d{4}", first["protocol"])
     assert (first["protocol"], second["protocol"]) == ("EMP-20260325-0001", "EMP-20260325-0002")
     assert handoff(make_tools("2026-03-26T10:30"))["protocol"] == "EMP-20260326-0001"
@@ -178,3 +178,34 @@ def test_all_tools_registered(make_tools):
         "search_policies",
         "handoff_to_human",
     }
+
+
+# --- idempotent handoff (real case: the same return opened twice) ----------------------------
+
+
+def test_same_case_twice_returns_the_existing_protocol(make_tools, engine):
+    tools = make_tools("2026-02-20T10:00")
+    first = handoff(tools, reason="other", summary="Devolução do pedido 7.", order_id=7)
+    again = handoff(tools, reason="other", summary="Cliente confirmou a devolução.", order_id=7)
+    assert again["protocol"] == first["protocol"] == "EMP-20260220-0001"
+    assert again["already_registered"] is True and "already_registered" not in first
+    with Session(engine) as db:
+        assert len(db.scalars(select(Handoff)).all()) == 1
+
+
+def test_two_orders_in_one_conversation_get_two_cases(make_tools):
+    tools = make_tools()
+    first = handoff(tools, summary="Atraso do pedido 8.", order_id=8)
+    second = handoff(tools, summary="Atraso do pedido 9.", order_id=9)
+    assert first["protocol"] != second["protocol"]
+    assert "already_registered" not in second
+
+
+def test_idempotency_key_is_session_reason_and_order(make_tools):
+    tools = make_tools()
+    base = handoff(tools, order_id=8)["protocol"]
+    assert handoff(tools, order_id=8)["protocol"] == base  # same key
+    assert handoff(tools, "s2", order_id=8)["protocol"] != base  # other session
+    assert handoff(tools, reason="manager_question", order_id=8)["protocol"] != base
+    no_order = handoff(tools, summary="Dúvida geral para a gerência.")["protocol"]
+    assert handoff(tools, summary="Mesma dúvida de novo.")["protocol"] == no_order

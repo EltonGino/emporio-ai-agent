@@ -115,6 +115,12 @@ class OrderInfo:
     items: list[OrderItemInfo]
 
 
+@dataclass(frozen=True)
+class HandoffResult:
+    protocol: str
+    created: bool  # False: the same case was already open in this session (idempotent)
+
+
 class UnknownCategoryError(ValueError):
     def __init__(self, name: str, known: list[str]) -> None:
         super().__init__(f"unknown category {name!r}")
@@ -141,8 +147,10 @@ class StoreRepository(Protocol):
         contact: str | None,
         session_id: str | None,
         created_at: datetime,
-    ) -> str:
-        """Register a request for the human team; returns its protocol EMP-YYYYMMDD-NNNN."""
+        order_id: int | None = None,
+    ) -> HandoffResult:
+        """Register a request for the human team (protocol EMP-YYYYMMDD-NNNN). Idempotent per
+        session + reason + order: the same case twice returns the open protocol."""
         ...
 
 
@@ -314,11 +322,23 @@ class SqlStoreRepository:
         contact: str | None,
         session_id: str | None,
         created_at: datetime,
-    ) -> str:
+        order_id: int | None = None,
+    ) -> HandoffResult:
         prefix = f"{PROTOCOL_PREFIX}-{created_at:%Y%m%d}-"
         for _ in range(PROTOCOL_ATTEMPTS):
             try:
                 with Session(self._engine) as session, session.begin():
+                    if session_id is not None:  # no session → nothing to deduplicate against
+                        existing = session.scalar(
+                            select(Handoff.protocol).where(
+                                Handoff.session_id == session_id,
+                                Handoff.reason == reason,
+                                Handoff.order_id.is_not_distinct_from(order_id),
+                                Handoff.status == "open",
+                            )
+                        )
+                        if existing:
+                            return HandoffResult(existing, created=False)
                     today = session.scalar(
                         select(func.count()).where(Handoff.protocol.startswith(prefix))
                     )
@@ -329,11 +349,12 @@ class SqlStoreRepository:
                             created_at=created_at.replace(tzinfo=None),
                             session_id=session_id,
                             reason=reason,
+                            order_id=order_id,
                             summary=summary,
                             contact=contact,
                         )
                     )
-                return protocol
+                return HandoffResult(protocol, created=True)
             except IntegrityError:
                 continue  # another handoff took this number: count again
         raise RuntimeError("could not allocate a handoff protocol")

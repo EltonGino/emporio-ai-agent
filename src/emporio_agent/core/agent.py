@@ -239,13 +239,16 @@ def build_agent(
     history_max_tokens: int,
     rate_limit_max_wait: float = MAX_RETRY_WAIT_SECONDS,
     rate_limit_sleep: Callable[[float], None] = time.sleep,
+    guards: Sequence[AgentMiddleware] = (),
 ):
-    """`models[0]` answers; the others are rate-limit fallbacks, in order."""
+    """`models[0]` answers; the others are rate-limit fallbacks, in order. `guards` (e.g.
+    ProtocolGuard) wrap everything else, so they check the answer whichever model wrote it."""
     return create_agent(
         models[0],
         tools=list(tools),
         system_prompt=system_prompt,
         middleware=[
+            *guards,
             ProviderFallback(models[1:], rate_limit_max_wait, rate_limit_sleep),
             DynamicContext(context),
             TrimHistory(history_max_messages, history_max_tokens),

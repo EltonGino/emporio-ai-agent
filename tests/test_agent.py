@@ -9,7 +9,12 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
 
-from emporio_agent.client.assistant import model_chain, render_system_prompt
+from emporio_agent.client.assistant import (
+    SAFE_PROTOCOL_ANSWER,
+    model_chain,
+    protocol_guard,
+    render_system_prompt,
+)
 from emporio_agent.config import Settings, get_client_config
 from emporio_agent.core.agent import (
     FAILED_MESSAGE,
@@ -229,6 +234,77 @@ def test_other_errors_are_not_hidden_by_the_fallback():
 def test_friendly_message_when_every_model_is_rate_limited():
     models = [ScriptedModel(script=[ProviderError(429)]) for _ in range(3)]
     assert run_turn(agent_with(*models), "s1", "oi").text == RATE_LIMITED_MESSAGE
+
+
+# --- protocol guard (real cases from the Groq runs) ------------------------------------------
+
+
+def guarded_agent(*models, tools=()):
+    return build_agent(
+        list(models),
+        list(tools),
+        STATIC,
+        lambda: CONTEXT,
+        InMemorySaver(),
+        20,
+        2500,
+        guards=[protocol_guard()],
+    )
+
+
+@tool
+def handoff_to_human(reason: str) -> str:
+    """Fake handoff."""
+    return '{"protocol":"EMP-20260325-0001","return_promise":"até 24 horas úteis"}'
+
+
+def test_invented_protocol_never_reaches_the_customer():
+    invented = AIMessage("Sinto muito pela demora, Ana.\n\n**Protocolo:** 20231102-8745")
+    honest = AIMessage("Sinto muito pela demora, Ana. Quer que eu registre o caso com a equipe?")
+    model = ScriptedModel(script=[invented, honest])
+    agent = guarded_agent(model)
+    result = run_turn(agent, "s1", "pedido 8, anacarol.ferreira@coldmail.com")
+    assert result.text == honest.content
+    assert "20231102-8745" in model.seen[-1][0].content  # the correction note named it
+    history = agent.get_state({"configurable": {"thread_id": "s1"}}).values["messages"]
+    assert all("20231102-8745" not in m.text for m in history)  # held back, never stored
+
+
+def test_safe_answer_when_the_model_insists():
+    invented = AIMessage("Protocolo: 20231102-8745")
+    model = ScriptedModel(script=[invented, AIMessage("Seu protocolo é 20231102-8746.")])
+    assert run_turn(guarded_agent(model), "s1", "oi").text == SAFE_PROTOCOL_ANSWER
+
+
+def test_issued_protocol_passes_untouched():
+    answer = AIMessage("Sinto muito, Ana. Protocolo **EMP-20260325-0001**, retorno em 24h úteis.")
+    model = ScriptedModel(script=[call("handoff_to_human", {"reason": "complaint"}), answer])
+    result = run_turn(guarded_agent(model, tools=[handoff_to_human]), "s1", "quero reclamar")
+    assert result.text == answer.content
+    assert len(model.seen) == 2  # no extra model call
+
+
+def test_protocol_issued_in_an_earlier_turn_is_valid_later():
+    script = [
+        call("handoff_to_human", {"reason": "complaint"}),
+        AIMessage("Registrado: EMP-20260325-0001."),
+        AIMessage("Claro! Seu protocolo é EMP-20260325-0001."),
+    ]
+    agent = guarded_agent(ScriptedModel(script=script), tools=[handoff_to_human])
+    run_turn(agent, "s1", "quero reclamar")
+    assert run_turn(agent, "s1", "qual era o protocolo?").text.endswith("EMP-20260325-0001.")
+
+
+def test_miscopied_protocol_is_caught():
+    script = [
+        call("handoff_to_human", {"reason": "other"}),
+        AIMessage("Protocolo: EMP-20260325-001."),  # one digit short (real case, run 5)
+        AIMessage("Protocolo: EMP-20260325-0001."),
+    ]
+    result = run_turn(
+        guarded_agent(ScriptedModel(script=script), tools=[handoff_to_human]), "s", "x"
+    )
+    assert result.text == "Protocolo: EMP-20260325-0001."
 
 
 # --- history trimming ------------------------------------------------------------------------

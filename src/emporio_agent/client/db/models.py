@@ -121,6 +121,7 @@ class Handoff(Base):
     created_at: Mapped[datetime]  # store time (naive)
     session_id: Mapped[str | None] = mapped_column(index=True)
     reason: Mapped[str] = mapped_column(String(20))
+    order_id: Mapped[int | None]  # plain number, no FK (runtime table)
     summary: Mapped[str]
     contact: Mapped[str | None]  # only if the customer offered it
     status: Mapped[str] = mapped_column(String(20), default="open")

@@ -144,6 +144,7 @@ class HandoffArgs(BaseModel):
     reason: Literal["complaint", "delayed_order", "manager_question", "unavailable_item", "other"]
     summary: str = Field(min_length=10, max_length=600, description="For the team, in Portuguese")
     contact: str = Field("", max_length=120, description="Customer's own phone/email, if given")
+    order_id: int = Field(0, ge=0, description="Order number, if the case is about one")
 
 
 def br_datetime(value: datetime) -> str:
@@ -455,20 +456,32 @@ def build_tools(
 
     @tool(args_schema=HandoffArgs)
     def handoff_to_human(
-        reason: str, summary: str, config: RunnableConfig, contact: str = ""
+        reason: str,
+        summary: str,
+        config: RunnableConfig,
+        contact: str = "",
+        order_id: int = 0,
     ) -> str:
         """Open a case for the human team; returns the protocol. For complaints, confirmed
-        return requests, delayed orders and questions the manual can't answer."""
+        return requests, delayed orders and questions the manual can't answer. The same
+        case again in this conversation returns the existing protocol."""
         now = clock.now()
-        protocol = repo.create_handoff(
-            reason, summary, contact or None, identity.session_id(config), created_at=now
+        result = repo.create_handoff(
+            reason,
+            summary,
+            contact or None,
+            identity.session_id(config),
+            created_at=now,
+            order_id=order_id or None,
         )
         status = store_status(now, client.store, calendar)
         data: dict[str, Any] = {
-            "protocol": protocol,
+            "protocol": result.protocol,
             "return_promise": (f"até {client.support.complaint_return_business_hours} horas úteis"),
             "team_available_now": status.is_open,
         }
+        if not result.created:
+            data["already_registered"] = True  # tell the customer it is the same case
         if status.next_opening:
             data["team_back_at"] = br_datetime(status.next_opening)
         return to_json(data)

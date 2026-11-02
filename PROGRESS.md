@@ -13,14 +13,16 @@ Update this file in the same commit as every plan step (see AGENTS.md §0 and §
 
 ## Next step
 
-**Waiting for the owner's decision** on a deterministic protocol guard (see Known issues,
-"Invented protocol"), then Step 13 — `feat(core): event stream and JSONL tracing`
-(AGENTS.md §8 event list, §13): one `AgentEvent` model (`core/events.py`): user_message,
-token, tool_start, tool_end (result preview, duration; tool artifacts such as
-`search_policies` sections and `check_return_eligibility` days_elapsed go to the trace),
-retrieval, final (text + the turn's `TurnUsage`), error; JSONL per session in
-`data/runtime/traces/`; only `content` is streamed (never reasoning); `run_turn` becomes a
-consumer of the stream; log 429 waits/fallbacks as events.
+Step 13 — `feat(core): event stream and JSONL tracing` (AGENTS.md §8 event list, §13). One
+`AgentEvent` model (`core/events.py`): user_message, token, tool_start, tool_end (result
+preview, duration; tool artifacts such as `search_policies` sections and
+`check_return_eligibility` days_elapsed go to the trace), retrieval, final (text + the turn's
+`TurnUsage`), error; JSONL per session in `data/runtime/traces/`; only `content` is ever
+emitted (never reasoning); `run_turn` becomes a consumer of the stream. Also trace the
+middleware decisions (429 wait/fallback, invalid tool call retry, protocol guard) and the
+**usage of discarded model calls** (a guard re-ask or a failed attempt is not in the final
+messages, so `TurnUsage` misses it today). **Final-answer text must be emitted only after the
+ProtocolGuard has validated it** (see "Protocol guard and streaming").
 
 ## Plan status
 
@@ -37,7 +39,7 @@ consumer of the stream; log 429 waits/fallbacks as events.
 | 9 | Payment rules | done | `feat(tools): payment rules` (ebaa394) |
 | 10 | Order status + return eligibility | done | `feat(tools): order status and return eligibility with identity check` (4d14084); `feat(tools): days since order in order status` (ca153a7) |
 | 11 | Store status, policy search, handoff | done | `feat(tools): store status, policy search and human handoff` (0ebaac7) |
-| 12 | Persona prompt + agent with memory | done | `feat(agent): persona prompt and tool-calling agent with memory` (1dd00d7); `fix(agent): return days left, 429 wait, invalid tool calls and prompt rules` |
+| 12 | Persona prompt + agent with memory | done | `feat(agent): persona prompt and tool-calling agent with memory` (1dd00d7); `fix(agent): return days left, 429 wait, invalid tool calls and prompt rules` (1a2986e); `feat(agent): protocol guard and idempotent handoff` |
 | 13 | Event stream + JSONL tracing | pending | |
 | 14 | CLI with debug mode | pending | |
 | 15 | Routing + adversarial evals | pending | |
@@ -595,6 +597,33 @@ consumer of the stream; log 429 waits/fallbacks as events.
   next model; if every model fails → `FAILED_MESSAGE` ("Pode escrever de outro jeito?"). Other
   400s still propagate. Order tool descriptions now say "call only with the number and email
   the customer gave".
+- **Protocol guard (owner decision, 2026-11-02)** — `core/guards.py` `ProtocolGuard`
+  middleware, outermost (it checks the answer whichever model wrote it, after fallbacks). A
+  final answer (AIMessage without tool calls) may only present protocols issued by
+  `handoff_to_human` in this session (read from the **full** state, not the trimmed request).
+  Detection does not depend on the EMP- format (the real invented one was "20231102-8745"):
+  (1) any dated code `[PREFIX-]YYYYMMDD-NNN+` anywhere; (2) after the word "protocolo" /
+  "protocol", the first token with ≥ 4 digits within 8 words (dates with "/", times with ":",
+  money and "R$" are not codes). Unknown code → the model is asked once more with a correction
+  note appended to the system prompt (naming the code); still unknown → fixed safe answer
+  ("Desculpe, me confundi… Quer que eu registre seu caso…?"). The invalid answer is never
+  stored in the checkpointer nor returned (tested). Texts (keywords, note, safe answer) come
+  from the client layer (`client/assistant.py`); the mechanism is client-agnostic.
+  Known trade-off: a bare 4-digit number right after "protocolo" (e.g. a year) would trigger a
+  re-ask; accepted, since a short invented code is the likelier risk.
+- **Protocol guard and streaming (owner decision) — affects steps 13 and 17.** The final answer
+  is held until the guard validates it, so the customer can never see a false protocol. In the
+  SSE API this means **raw LLM tokens of the final answer cannot be streamed live**: the server
+  emits `token` events only after validation (the validated text can still be sent in chunks
+  to keep a typing effect), and tool events/typing indicator cover the wait. Tool-calling
+  steps are unaffected. The CLI follows the same rule.
+- **Idempotent handoff (owner decision, 2026-11-02)** — `handoff_to_human` gained optional
+  `order_id` (0 = none; `handoffs.order_id` nullable, no FK). Idempotency key = **session +
+  reason + order_id** among open handoffs (`is_not_distinct_from`, so "no order" matches "no
+  order" on SQLite and Postgres): the same case again returns the existing protocol with
+  `already_registered: true`; two different orders in one conversation get two protocols
+  (tested); no session → no deduplication. No migration needed: the runtime `store.db` had no
+  `handoffs` table yet (schema changes to runtime tables would need Alembic in production).
 - **Step 12** — Known quality gap: when the 120b is rate limited mid-turn the 20b writes the
   answer, and it follows the tone rules less strictly (e.g. an emoji in a complaint in run 2).
   Mitigations if needed: shorter tool descriptions (fewer tokens per call), or the README
@@ -628,19 +657,14 @@ consumer of the stream; log 429 waits/fallbacks as events.
   WhatsApp number (P1). Steps 11/12: contacts must come from `client.yaml` (store status tool /
   prompt), and the prompt must say config contacts win over retrieved text.
 
-- **Invented protocol / duplicate handoff (run 6, 2026-11-02) — needs a decision before
-  step 13.** With the final prompt, the 120b once wrote "Protocolo: 20231102-8745" **without
-  calling `handoff_to_human`** (pedido 8, turn 2), and in the return conversation it opened a
-  handoff without asking and then a second one when the customer confirmed (EMP-20260220-0001
-  and -0002 for the same request). Prompt rules alone don't make this reliable. Proposed
-  deterministic guards (code, not prompt): (a) **protocol guard** — a final answer may only
-  contain protocol numbers issued by `handoff_to_human` in this session; if it mentions an
-  unknown one, re-ask the model once with a correction note, and if it still fails, replace the
-  answer with a safe one; (b) **idempotent handoff** — a second handoff with the same reason in
-  the same session returns the existing protocol (`already_registered: true`).
-  Re-run results (complaint + return, 6 turns): ≈ 3,900 counted tokens/turn; 1 × 15 s wait on
-  the 120b, 0 fallbacks; complaint answers open with empathy and have no emoji; no repeated
-  greeting.
+- **Guard run (run 7, complaint + return, 6 turns, 2026-11-02)** — ≈ 2,690 counted
+  tokens/turn (cache 8,960 of 24,414 input). The 120b **invented "20231102-1456" again**
+  (pedido 8, turn 2); the guard caught it and the customer only saw "Gostaria que eu registre
+  um caso…?". Two Groq `tool_use_failed` 400s recovered by the retry. One handoff per case,
+  with `order_id` (8 and 7). Remaining nits: the complaint answer was written by the 20b (a
+  second 429 on the retried 120b) and opened with the protocol instead of empathy; the return
+  handoff used reason `complaint` instead of `other` (AGENTS.md reasons have no "return";
+  consider adding one later).
 - **README known limitation (owner, step 9):** installments are `total / n` rounded to cents,
   so n × installment can differ from the total by a few cents (e.g. 7 × R$ 314,14 =
   R$ 2.198,98 for R$ 2.199,00); a real checkout adjusts one installment. List it in README
@@ -841,3 +865,15 @@ consumer of the stream; log 429 waits/fallbacks as events.
 - Live re-runs (complaint + return only): run 5 found the 400 crash and a mis-copied protocol;
   run 6 found an invented protocol and a duplicate handoff (Known issues). Stopped before
   step 13 for the owner's decision.
+
+### 2026-11-02 05:00 — Step 12 follow-up: protocol guard and idempotent handoff
+- Done: `core/guards.py` (`ProtocolGuard`, `claimed_protocols`, `issued_protocols`), wired as
+  the outermost middleware via `build_agent(guards=...)`; `handoff_to_human(order_id)` +
+  idempotency in `repo.create_handoff` (returns `HandoffResult`).
+- Files: `src/emporio_agent/core/{agent,guards}.py`, `src/emporio_agent/client/{assistant,
+  repository,tools}.py`, `src/emporio_agent/client/db/models.py`, `tests/test_guards.py`,
+  `tests/test_agent.py`, `tests/test_store_tools.py`, `PROGRESS.md`.
+- Tests: ruff ok, format ok, `pytest -m "not llm"` 242 passed — incl. the real cases: protocol
+  without EMP- prefix, mis-copied protocol, invalid answer never stored, duplicate handoff,
+  two orders → two protocols.
+- Live re-run: see Known issues "Guard run (run 7)".
