@@ -1,21 +1,33 @@
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createApiClient, isMock } from './api'
 import { conversations } from './api/mock'
+import { BackstagePanel } from './components/BackstagePanel'
 import { Composer } from './components/Composer'
 import { Header } from './components/Header'
 import { MessageList } from './components/MessageList'
 import { Monogram } from './components/Monogram'
+import { SimulatedDateBanner } from './components/SimulatedDateBanner'
 import { SuggestionChips } from './components/SuggestionChips'
 import { useChat } from './hooks/useChat'
 
+const params = new URLSearchParams(location.search)
 // Mock mode only: ?replay=<conversation id> plays a recorded conversation at once (screenshots).
-const replayId = isMock ? new URLSearchParams(location.search).get('replay') : null
+const replayId = isMock ? params.get('replay') : null
+const DESKTOP = '(min-width: 1024px)'
 
 export default function App() {
-  const client = useMemo(() => createApiClient({ instant: Boolean(replayId) }), [])
+  const client = useMemo(
+    () => createApiClient({ instant: Boolean(replayId), replay: replayId ?? undefined }),
+    [],
+  )
   const chat = useChat(client)
   const { config, send } = chat
   const assistant = config?.assistant_name ?? 'Tom'
+  const demo = config?.demo_mode ?? false
+  // Bastidores: open by default on desktop, a closed drawer on phones (?panel=open forces it).
+  const [panelOpen, setPanelOpen] = useState(
+    () => params.get('panel') === 'open' || window.matchMedia(DESKTOP).matches,
+  )
 
   const replayed = useRef(false)
   useEffect(() => {
@@ -61,8 +73,22 @@ export default function App() {
         busy={chat.busy}
         onNewConversation={chat.newConversation}
         onDeleteData={confirmDelete}
+        extraActions={
+          demo ? (
+            <button
+              type="button"
+              aria-pressed={panelOpen}
+              onClick={() => setPanelOpen((open) => !open)}
+              className="flex-1 rounded-full bg-console px-2.5 py-1.5 font-mono text-xs whitespace-nowrap text-console-amber ring-1 ring-console-amber/40 transition hover:ring-console-amber sm:flex-none sm:px-4 sm:text-sm"
+            >
+              {panelOpen ? 'Ocultar bastidores' : 'Bastidores'}
+            </button>
+          ) : null
+        }
       />
-      <main className="flex min-h-0 flex-1 flex-col">
+      <SimulatedDateBanner iso={config?.simulated_now} />
+      <div className="flex min-h-0 flex-1">
+      <main className="flex min-h-0 min-w-0 flex-1 flex-col">
         <MessageList messages={chat.messages} assistantName={assistant} empty={welcome} />
         <div className="border-t border-maple/70 bg-ivory/95">
           <div className="mx-auto flex max-w-3xl flex-col gap-3 px-4 py-3 sm:px-6">
@@ -74,6 +100,20 @@ export default function App() {
           </div>
         </div>
       </main>
+      {demo && panelOpen ? (
+        <>
+          {/* Phones: a drawer over the chat, with a backdrop; desktop: a side column. */}
+          <div
+            className="fixed inset-0 z-20 bg-walnut/50 lg:hidden"
+            onClick={() => setPanelOpen(false)}
+            aria-hidden="true"
+          />
+          <aside className="fixed inset-y-0 right-0 z-30 w-[min(92vw,26rem)] shadow-2xl lg:static lg:z-auto lg:w-[28rem] lg:shadow-none">
+            <BackstagePanel turns={chat.turns} onClose={() => setPanelOpen(false)} />
+          </aside>
+        </>
+      ) : null}
+      </div>
     </div>
   )
 }

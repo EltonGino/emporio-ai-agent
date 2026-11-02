@@ -13,10 +13,12 @@ Update this file in the same commit as every plan step (see AGENTS.md §0 and §
 
 ## Next step
 
-**Owner's overnight order (2026-11-02):** step 15 (preparation only, not run against Groq) →
-step 16 (CI) → steps 18–20 (frontend with a mock API) → **stop**. Steps 17 and 21 are NOT to be
-started until the owner reviews. No pushes (local commits only). See "Overnight run — what to
-review" under Known issues.
+**Waiting for the owner's review** of the overnight run (see "Overnight run — what to review"
+under Known issues). Nothing is pushed: local commits f544c30 (step 15 prep), af62cb5 (16),
+d8dbbdc (18), 4ae5145 (19) and the step 20 commit, on top of the unpushed f8ea8e2 (14) and
+2e40cf1 (14 fixes). After approval: push, then **step 17** (FastAPI implementing the contract
+in "Step 19 — API contract the frontend expects", async end to end, state in the DB, WAL),
+then 21, then running the step 15 evals on Groq.
 
 ## Plan status
 
@@ -40,8 +42,8 @@ review" under Known issues.
 | 16 | CI workflow | done (not yet run on GitHub) | `ci: lint and tests workflow` (af62cb5) |
 | 17 | FastAPI (SSE, sessions, rate limit, retention, deletion) | pending | |
 | 18 | Frontend scaffold | done | `feat(frontend): Vite React scaffold` (d8dbbdc) |
-| 19 | Chat UI with streaming | done (mock API; real API in step 17) | `feat(frontend): customer service chat with streaming` |
-| 20 | Bastidores panel + simulated date banner | pending | |
+| 19 | Chat UI with streaming | done (mock API; real API in step 17) | `feat(frontend): customer service chat with streaming` (4ae5145) |
+| 20 | Bastidores panel + simulated date banner | done (mock API) | `feat(frontend): demo-mode behind-the-scenes panel and simulated date banner` |
 | 21 | Serve frontend from API, Docker | pending | |
 | 22 | Recorded example conversations | pending | |
 | 23 | README | pending | |
@@ -799,6 +801,26 @@ review" under Known issues.
   "defeito" routing-gap answer. Anonymized: Letícia (Gonçalves) Rocha /
   leticia.rocha@jmail.com → Marina Teixeira / marina.teixeira@jmail.com; Bruno Martins →
   Carlos Nogueira (names not in customers.csv). Error `detail` stripped.
+- **Step 20** — `BackstagePanel` ("$ bastidores", dark console palette, JetBrains Mono): one
+  card per customer message with the turn duration (server `final.duration_ms`, else
+  measured), `▸` tool calls with args, `✓` tool results (preview in a `<details>`, ms), `§`
+  retrieved sections with RRF score and retrievers, `!` rate-limit / invalid-tool-call
+  notices, `⛨` output-guard interventions, `·` tool artifacts kept out of the model, `Σ`
+  token usage and models; label "Visível apenas no modo demo — clientes não veem este painel".
+  Shown only when `config.demo_mode`; toggle in the header. Desktop (≥ 1024 px): side column,
+  open by default; phones: drawer over the chat with a backdrop, closed by default
+  (`?panel=open` forces it). `SimulatedDateBanner` from `config.simulated_now` ("Data
+  simulada: 25/03/2026 10:30 (horário de Campo Grande)"); in mock replays it shows the date
+  the conversation was recorded at. Header on phones: name on one line, actions on a second
+  row ("Apagar dados" short label, full aria-label).
+- **Step 20 — bug found by the screenshots:** recent Chrome returns a Promise from
+  `scrollIntoView()`; an arrow-expression `useEffect(() => el.scrollIntoView())` returned it
+  and React crashed ("destroy is not a function"). Effects now use braces (commented).
+- **Step 20 — screenshots** (`frontend/screenshots/`, gitignored): mock build served by
+  `vite preview`, headless Chrome; desktop 1440×900 (`desktop-1-inicio`, `-2-frete-politica`,
+  `-3-devolucao`, `-4-seguranca`) and phone 390×844 @2x (`mobile-1-inicio`, `-2-chat`,
+  `-3-bastidores-gaveta`). Chrome's minimum headless window is 500 px, so phone shots render
+  the app in a 390 px iframe and crop (sips) — true phone layout.
 - **Convention** — The "Commit" column holds the commit subject; hashes are in `git log`
   (a commit cannot contain its own hash).
 
@@ -852,6 +874,23 @@ review" under Known issues.
   code since the order was verified; the confirmation then returned `already_registered`).
   The 120b was rate limited with retry-after 150–937 s (daily quota close to exhausted after
   the day's tests), so the 20b/qwen answered almost everything.
+- **Overnight run — what to review (2026-11-02):**
+  1. *Step 15 cases* (`evals/*.yaml`): wording and strictness of each expectation (e.g.
+     `no_guard_failures` on several cases; "answer_not_contains" name lists). Not run on Groq
+     yet; run them on gpt-oss-20b first (`scripts/run_evals.py --llm-model
+     openai/gpt-oss-20b`) when the quota allows.
+  2. *CI* (`.github/workflows/ci.yml`): runs on the first push; the embeddings job downloads
+     ~1 GB once, then uses the cache.
+  3. *Frontend look* — screenshots in `frontend/screenshots/` (desktop + phone). Palette,
+     fonts (Fraunces / Source Sans 3 / JetBrains Mono), wooden-sign header, rosette monogram,
+     dark console panel. Run it: `cd frontend && npm install && VITE_MOCK=true npm run dev`.
+  4. *Mock fixtures* — 4 real conversations, anonymized (Marina Teixeira, Carlos Nogueira);
+     answers recorded before later fixes were left out. The "devolução" fixture shows the
+     agent opening the case without asking first (real 2026-02-20 behaviour, before the
+     verified-order rule; still legitimate there because the order was looked up).
+  5. *API contract additions* for step 17: `slogan` in `/api/config`; error `detail` shown to
+     customers; SSE `data:` blocks with AgentEvent JSON (CRLF tolerated).
+  6. Not done on purpose: steps 17 and 21; no push.
 - **README known limitation (owner, step 9):** installments are `total / n` rounded to cents,
   so n × installment can differ from the total by a few cents (e.g. 7 × R$ 314,14 =
   R$ 2.198,98 for R$ 2.199,00); a real checkout adjusts one installment. List it in README
@@ -1131,3 +1170,13 @@ review" under Known issues.
   `frontend/src/mocks/conversations.json`, `scripts/export_demo_fixtures.py`, `PROGRESS.md`.
 - Checks: `npm run build` ok, `npm run lint` ok; ruff ok. Mock build checked in headless
   Chrome with `?replay=violao-esgotado`.
+
+### 2026-11-02 11:30 — Step 20: Bastidores panel + simulated date banner (mock API)
+- Done: Bastidores console panel (side column / phone drawer), toggle, simulated-date banner,
+  phone header layout, replay date + recorded duration; screenshots for review.
+- Files: `frontend/src/App.tsx`, `frontend/src/index.css`,
+  `frontend/src/components/{BackstagePanel,SimulatedDateBanner,Header}.tsx`,
+  `frontend/src/api/{mock,index}.ts`, `PROGRESS.md`.
+- Checks: `npm run build` ok, `npm run lint` ok; mock build verified in headless Chrome
+  (desktop and 390 px phone), screenshots in `frontend/screenshots/`.
+- Stopped here (owner instruction): step 17 and 21 not started; nothing pushed.

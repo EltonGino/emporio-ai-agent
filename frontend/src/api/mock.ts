@@ -36,7 +36,9 @@ const FALLBACK =
   'Escolha uma das sugestões abaixo para ver como eu respondo.'
 
 /** Delays imitate the real pace; `instant` replays with none (used by ?replay=). */
-export function createMockClient(options: { instant?: boolean } = {}): ApiClient {
+export function createMockClient(options: { instant?: boolean; replay?: string } = {}): ApiClient {
+  // A replayed conversation shows the simulated date it was recorded at.
+  const recordedNow = conversations.find((c) => c.id === options.replay)?.now
   const pause = (ms: number) => (options.instant ? Promise.resolve() : sleep(ms))
   return {
     mode: 'mock',
@@ -46,7 +48,7 @@ export function createMockClient(options: { instant?: boolean } = {}): ApiClient
         store_name: 'Empório da Música',
         slogan: 'Sua música começa aqui.',
         demo_mode: true,
-        simulated_now: '2026-03-25T10:30',
+        simulated_now: recordedNow ?? '2026-03-25T10:30',
       }
     },
     async chat(_sessionId, message, onEvent) {

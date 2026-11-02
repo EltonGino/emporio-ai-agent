@@ -11,17 +11,17 @@ interface Props {
 }
 
 const buttonClass =
-  'rounded-full border border-maple/60 px-3 py-1.5 text-sm font-semibold text-ivory ' +
-  'transition hover:bg-ivory/10 disabled:opacity-50 sm:px-4'
+  'flex-1 rounded-full border border-maple/60 px-3 py-1.5 text-sm font-semibold whitespace-nowrap ' +
+  'text-ivory transition hover:bg-ivory/10 disabled:opacity-50 sm:flex-none sm:px-4'
 
 export function Header(props: Props) {
   return (
     <header className="wood-sign relative z-10 text-ivory shadow-md">
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 sm:px-6">
+      <div className="flex flex-col gap-2.5 px-4 py-3 sm:flex-row sm:items-center sm:gap-4 sm:px-6">
         <div className="flex min-w-0 flex-1 items-center gap-3">
-          <Monogram size={44} className="shrink-0 drop-shadow" />
+          <Monogram size={40} className="shrink-0 drop-shadow sm:size-11" />
           <div className="min-w-0">
-            <h1 className="font-display text-xl leading-tight font-semibold tracking-tight sm:text-2xl">
+            <h1 className="truncate font-display text-xl leading-tight font-semibold tracking-tight sm:text-2xl">
               {props.storeName}
             </h1>
             <p className="truncate text-sm text-maple">
@@ -33,12 +33,19 @@ export function Header(props: Props) {
             </p>
           </div>
         </div>
-        <nav className="flex flex-wrap items-center gap-2" aria-label="Ações da conversa">
+        <nav className="flex items-center gap-2" aria-label="Ações da conversa">
           <button type="button" className={buttonClass} onClick={props.onNewConversation} disabled={props.busy}>
             Nova conversa
           </button>
-          <button type="button" className={buttonClass} onClick={props.onDeleteData} disabled={props.busy}>
-            Apagar meus dados
+          <button
+            type="button"
+            className={buttonClass}
+            onClick={props.onDeleteData}
+            disabled={props.busy}
+            aria-label="Apagar meus dados"
+          >
+            <span className="sm:hidden">Apagar dados</span>
+            <span className="hidden sm:inline">Apagar meus dados</span>
           </button>
           {props.extraActions}
         </nav>
