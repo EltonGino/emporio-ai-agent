@@ -45,6 +45,7 @@ def test_settings_defaults(clean_env):
     assert settings.llm_fallback_models == ["openai/gpt-oss-20b", "qwen/qwen3.8-27b"]
     assert settings.llm_reasoning_effort == "low"
     assert settings.max_messages_per_session == 15
+    assert settings.rate_limit_max_wait_seconds == 15.0
 
 
 def test_fallback_models_are_comma_separated(clean_env):

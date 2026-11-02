@@ -220,6 +220,8 @@ def test_return_tool_regret_example(make_tools):
     )
     assert result["eligible"] is True
     assert result["deadline"] == "24/02/2026"
+    assert result["days_left"] == 4  # 20/02 → 24/02
+    assert "days_elapsed" not in result  # kept out of the model's view (tracing only)
     assert result["receipt_date_is_estimate"] is True
     assert result["conditions_to_confirm"] == RETURNS.item_conditions["arrependimento"]
     assert result["not_eligible_items"] == RETURNS.ineligible_conditions

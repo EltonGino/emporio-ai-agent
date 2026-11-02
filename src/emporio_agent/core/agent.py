@@ -1,9 +1,11 @@
 """Tool-calling agent (LangChain v1 `create_agent`) with memory and three middlewares:
 
-- RateLimitFallback: on HTTP 429 only. If the provider asks to wait a few seconds
-  (retry-after ≤ MAX_RETRY_WAIT_SECONDS), wait and retry the same model once; otherwise retry
-  the call on the next model in the chain (each Groq model has its own quota). Any other
-  error propagates.
+- ProviderFallback: two recoverable provider errors. HTTP 429: if the provider asks to wait a
+  few seconds (retry-after ≤ RATE_LIMIT_MAX_WAIT_SECONDS, default 15 s), wait and retry the
+  same model once; otherwise retry the call on the next model in the chain (each Groq model
+  has its own quota). HTTP 400 `tool_use_failed` (the provider rejected a tool call that
+  didn't match its schema): retry the same model once, then the next one. Any other error
+  propagates.
 - DynamicContext: appends the current context (date, store open/closed) **after** the static
   system prompt, so the static prompt + tools stay a byte-identical, cacheable prefix.
 - TrimHistory: sends the model only the recent history (by messages and tokens). The full
@@ -33,7 +35,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 
 logger = logging.getLogger(__name__)
 
-MAX_RETRY_WAIT_SECONDS = 10.0  # waiting longer than this is worse than a smaller model
+MAX_RETRY_WAIT_SECONDS = 15.0  # default; waiting longer is worse than a smaller model
 RETRY_MARGIN_SECONDS = 0.5
 # Groq's 429 message: "... Please try again in 7.66s" / "in 1m2.5s" / "in 450ms".
 RETRY_IN = re.compile(r"try again in (?:(\d+)m)?(\d+(?:\.\d+)?)(ms|s)")
@@ -42,11 +44,18 @@ RATE_LIMITED_MESSAGE = (
     "Desculpe, estou com muitas conversas agora e não consegui responder. "
     "Pode tentar de novo em alguns instantes? 🙏"
 )
+FAILED_MESSAGE = "Desculpe, não consegui processar sua mensagem. Pode escrever de outro jeito?"
 
 
 def is_rate_limit(error: Exception) -> bool:
     """HTTP 429 from any provider SDK (groq.RateLimitError has status_code 429)."""
     return getattr(error, "status_code", None) == 429
+
+
+def is_invalid_tool_call(error: Exception) -> bool:
+    """HTTP 400 when the provider validates a generated tool call against its schema
+    (Groq: code "tool_use_failed"). The generation is random: a retry usually works."""
+    return getattr(error, "status_code", None) == 400 and "tool_use_failed" in str(error)
 
 
 def retry_after(error: Exception) -> float | None:
@@ -67,7 +76,7 @@ def _model_name(request: ModelRequest) -> str:
     return getattr(request.model, "model_name", None) or type(request.model).__name__
 
 
-class RateLimitFallback(AgentMiddleware):
+class ProviderFallback(AgentMiddleware):
     def __init__(
         self,
         fallbacks: Sequence[BaseChatModel],
@@ -84,6 +93,12 @@ class RateLimitFallback(AgentMiddleware):
 
     def _wait_before_retry(self, error: Exception, request: ModelRequest, retried: bool):
         """Seconds to wait before retrying the same model, or None to move on."""
+        if is_invalid_tool_call(error):
+            if retried:
+                logger.warning("invalid tool call on %s: next model", _model_name(request))
+                return None
+            logger.info("invalid tool call on %s: retrying", _model_name(request))
+            return 0.0
         if not is_rate_limit(error):
             raise error
         wait = retry_after(error)
@@ -96,30 +111,43 @@ class RateLimitFallback(AgentMiddleware):
     def wrap_model_call(
         self, request: ModelRequest, handler: Callable[[ModelRequest], ModelResponse]
     ) -> ModelResponse | AIMessage:
+        last_error: Exception | None = None
         for attempt in self._requests(request):
             for retried in (False, True):
                 try:
                     return handler(attempt)
                 except Exception as error:
+                    last_error = error
                     wait = self._wait_before_retry(error, attempt, retried)
                     if wait is None:
                         break
-                    self.sleep(wait)
-        return AIMessage(RATE_LIMITED_MESSAGE)
+                    if wait:
+                        self.sleep(wait)
+        return _give_up(last_error)
 
     async def awrap_model_call(
         self, request: ModelRequest, handler: Callable[[ModelRequest], Awaitable[ModelResponse]]
     ) -> ModelResponse | AIMessage:
+        last_error: Exception | None = None
         for attempt in self._requests(request):
             for retried in (False, True):
                 try:
                     return await handler(attempt)
                 except Exception as error:
+                    last_error = error
                     wait = self._wait_before_retry(error, attempt, retried)
                     if wait is None:
                         break
-                    await asyncio.sleep(wait)
+                    if wait:
+                        await asyncio.sleep(wait)
+        return _give_up(last_error)
+
+
+def _give_up(error: Exception | None) -> AIMessage:
+    """Every model failed with a recoverable error: answer politely instead of crashing."""
+    if error is not None and is_rate_limit(error):
         return AIMessage(RATE_LIMITED_MESSAGE)
+    return AIMessage(FAILED_MESSAGE)
 
 
 class DynamicContext(AgentMiddleware):
@@ -209,6 +237,7 @@ def build_agent(
     checkpointer: BaseCheckpointSaver,
     history_max_messages: int,
     history_max_tokens: int,
+    rate_limit_max_wait: float = MAX_RETRY_WAIT_SECONDS,
     rate_limit_sleep: Callable[[float], None] = time.sleep,
 ):
     """`models[0]` answers; the others are rate-limit fallbacks, in order."""
@@ -217,7 +246,7 @@ def build_agent(
         tools=list(tools),
         system_prompt=system_prompt,
         middleware=[
-            RateLimitFallback(models[1:], sleep=rate_limit_sleep),
+            ProviderFallback(models[1:], rate_limit_max_wait, rate_limit_sleep),
             DynamicContext(context),
             TrimHistory(history_max_messages, history_max_tokens),
         ],

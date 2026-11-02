@@ -100,4 +100,5 @@ def build_store_agent(
         checkpointer,
         settings.history_max_messages,
         settings.history_max_tokens,
+        settings.rate_limit_max_wait_seconds,
     )

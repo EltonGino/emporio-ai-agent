@@ -12,6 +12,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from emporio_agent.client.assistant import model_chain, render_system_prompt
 from emporio_agent.config import Settings, get_client_config
 from emporio_agent.core.agent import (
+    FAILED_MESSAGE,
     RATE_LIMITED_MESSAGE,
     build_agent,
     retry_after,
@@ -56,7 +57,7 @@ class ProviderError(Exception):
 def agent_with(*models, tools=(), sleeps=None):
     sleep = sleeps.append if sleeps is not None else lambda seconds: None
     return build_agent(
-        list(models), list(tools), STATIC, lambda: CONTEXT, InMemorySaver(), 20, 2500, sleep
+        list(models), list(tools), STATIC, lambda: CONTEXT, InMemorySaver(), 20, 2500, 15, sleep
     )
 
 
@@ -148,16 +149,16 @@ def test_falls_back_to_the_next_model_on_429():
 
 def test_short_retry_after_waits_and_retries_the_same_model():
     sleeps: list[float] = []
-    first = ScriptedModel(script=[ProviderError(429, retry_after="3"), AIMessage("do primeiro")])
+    first = ScriptedModel(script=[ProviderError(429, retry_after="13"), AIMessage("do primeiro")])
     second = ScriptedModel(script=[AIMessage("não deveria responder")])
     result = run_turn(agent_with(first, second, sleeps=sleeps), "s1", "oi")
     assert result.text == "do primeiro" and second.seen == []
-    assert sleeps == [3.5]  # retry-after + margin
+    assert sleeps == [13.5]  # retry-after + margin, within the 15 s default
 
 
 def test_long_retry_after_moves_to_the_next_model_without_waiting():
     sleeps: list[float] = []
-    first = ScriptedModel(script=[ProviderError(429, retry_after="42")])
+    first = ScriptedModel(script=[ProviderError(429, retry_after="16")])
     second = ScriptedModel(script=[AIMessage("do segundo")])
     assert run_turn(agent_with(first, second, sleeps=sleeps), "s1", "oi").text == "do segundo"
     assert sleeps == []
@@ -186,6 +187,35 @@ def test_retry_after_from_groq_message(message, seconds):
 
 def test_retry_after_header_wins():
     assert retry_after(ProviderError(429, "try again in 9s", retry_after="2")) == 2.0
+
+
+TOOL_USE_FAILED = (
+    "Error code: 400 - {'error': {'message': 'Tool call validation failed', "
+    "'code': 'tool_use_failed'}}"
+)
+
+
+def test_invalid_tool_call_is_retried_on_the_same_model_without_waiting():
+    sleeps: list[float] = []
+    first = ScriptedModel(script=[ProviderError(400, TOOL_USE_FAILED), AIMessage("ok")])
+    assert run_turn(agent_with(first, sleeps=sleeps), "s1", "oi").text == "ok"
+    assert sleeps == []
+
+
+def test_invalid_tool_call_twice_moves_to_the_next_model():
+    first = ScriptedModel(script=[ProviderError(400, TOOL_USE_FAILED)] * 2)
+    second = ScriptedModel(script=[AIMessage("do segundo")])
+    assert run_turn(agent_with(first, second), "s1", "oi").text == "do segundo"
+
+
+def test_polite_message_when_every_model_fails_the_tool_call():
+    models = [ScriptedModel(script=[ProviderError(400, TOOL_USE_FAILED)] * 2) for _ in range(2)]
+    assert run_turn(agent_with(*models), "s1", "oi").text == FAILED_MESSAGE
+
+
+def test_other_bad_requests_propagate():
+    with pytest.raises(ProviderError):
+        run_turn(agent_with(ScriptedModel(script=[ProviderError(400, "bad request")])), "s", "oi")
 
 
 def test_other_errors_are_not_hidden_by_the_fallback():

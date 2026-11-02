@@ -348,7 +348,8 @@ def build_tools(
 
     @tool(args_schema=OrderLookupArgs)
     def get_order_status(order_id: int, email: str, config: RunnableConfig) -> str:
-        """The customer's own order; needs order number and purchase email.
+        """The customer's own order. Call only with the order number and purchase email the
+        customer gave.
         estimated_delivery is a forecast; days_since_order counts from the purchase. delayed
         (see days_since_estimated_delivery) or long pending/confirmed → acknowledge the wait,
         offer the team, never invent dates."""
@@ -378,22 +379,23 @@ def build_tools(
             data["delayed"] = False
         return to_json({k: v for k, v in data.items() if v is not None})
 
-    @tool(args_schema=ReturnArgs)
+    @tool(args_schema=ReturnArgs, response_format="content_and_artifact")
     def check_return_eligibility(
         order_id: int, email: str, reason: ReturnReason, config: RunnableConfig
-    ) -> str:
-        """Can a delivered order be returned/exchanged today, and until when. reason:
-        arrependimento | defeito | preferencia (other color/model). Needs order number and
-        purchase email."""
+    ) -> tuple[str, dict[str, Any]]:
+        """Can a delivered order be returned/exchanged today, and until when (deadline,
+        days_left). reason: arrependimento | defeito | preferencia (other color/model). Needs
+        order number and purchase email the customer gave."""
         order = identified_order(order_id, email, config)
         if isinstance(order, str):
-            return order
+            return order, {}
+        today = clock.now().date()
         decision = return_eligibility(
             reason,
             order.status,
             order.order_date,
             order.estimated_delivery,
-            clock.now().date(),
+            today,
             client.returns,
         )
         data: dict[str, Any] = {
@@ -403,7 +405,9 @@ def build_tools(
             "eligible": decision.eligible,
             "rule_applied": decision.rule_applied,
             "deadline": br_date(decision.deadline),
-            "days_elapsed": decision.days_elapsed,
+            # Days left, not days elapsed: the model mixed up "3 days since receipt" with the
+            # time left. 0 = today is the last day.
+            "days_left": (decision.deadline - today).days if decision.eligible else None,
             "receipt_date": br_date(decision.receipt_date),
             "legal_warranty_until": br_date(decision.legal_warranty_until),
             "next_steps": RETURN_NEXT_STEPS[
@@ -414,7 +418,10 @@ def build_tools(
             data["receipt_date_is_estimate"] = True  # D6: estimated delivery date
             data["conditions_to_confirm"] = client.returns.item_conditions[reason]
             data["not_eligible_items"] = client.returns.ineligible_conditions
-        return to_json({k: v for k, v in data.items() if v is not None})
+        # The artifact is not sent to the model: it is for tracing.
+        return to_json({k: v for k, v in data.items() if v is not None}), {
+            "days_elapsed": decision.days_elapsed
+        }
 
     @tool
     def get_store_status() -> str:

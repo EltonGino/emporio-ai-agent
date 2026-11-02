@@ -13,12 +13,14 @@ Update this file in the same commit as every plan step (see AGENTS.md §0 and §
 
 ## Next step
 
-Step 13 — `feat(core): event stream and JSONL tracing` (AGENTS.md §8 event list, §13).
-One `AgentEvent` model (`core/events.py`): user_message, token, tool_start, tool_end
-(result preview, duration), retrieval (from the `search_policies` artifact), final (text +
-the turn's token usage: input, cached, output, reasoning, models — `core.agent.TurnUsage`),
-error. JSONL per session in `data/runtime/traces/`. Only `content` is ever streamed (never
-reasoning). `run_turn` becomes a consumer of the stream.
+**Waiting for the owner's decision** on a deterministic protocol guard (see Known issues,
+"Invented protocol"), then Step 13 — `feat(core): event stream and JSONL tracing`
+(AGENTS.md §8 event list, §13): one `AgentEvent` model (`core/events.py`): user_message,
+token, tool_start, tool_end (result preview, duration; tool artifacts such as
+`search_policies` sections and `check_return_eligibility` days_elapsed go to the trace),
+retrieval, final (text + the turn's `TurnUsage`), error; JSONL per session in
+`data/runtime/traces/`; only `content` is streamed (never reasoning); `run_turn` becomes a
+consumer of the stream; log 429 waits/fallbacks as events.
 
 ## Plan status
 
@@ -35,7 +37,7 @@ reasoning). `run_turn` becomes a consumer of the stream.
 | 9 | Payment rules | done | `feat(tools): payment rules` (ebaa394) |
 | 10 | Order status + return eligibility | done | `feat(tools): order status and return eligibility with identity check` (4d14084); `feat(tools): days since order in order status` (ca153a7) |
 | 11 | Store status, policy search, handoff | done | `feat(tools): store status, policy search and human handoff` (0ebaac7) |
-| 12 | Persona prompt + agent with memory | done | `feat(agent): persona prompt and tool-calling agent with memory` |
+| 12 | Persona prompt + agent with memory | done | `feat(agent): persona prompt and tool-calling agent with memory` (1dd00d7); `fix(agent): return days left, 429 wait, invalid tool calls and prompt rules` |
 | 13 | Event stream + JSONL tracing | pending | |
 | 14 | CLI with debug mode | pending | |
 | 15 | Routing + adversarial evals | pending | |
@@ -577,6 +579,22 @@ reasoning). `run_turn` becomes a consumer of the stream.
   `min_price=0`, `max_price=0` = no limit, `contact=""`) so schemas have no `anyOf`/`null`.
   Rules kept: availability labels, unavailable/partial_match/possible_accessory_query meanings,
   installment_summary, forecast vs delivery, query rewriting example, official contacts.
+- **Step 12 follow-up (owner, 2026-11-02)** — (1) `check_return_eligibility` returns
+  `days_left` (deadline − today, only when eligible) and the deadline; `days_elapsed` moved to
+  the tool **artifact** (`response_format="content_and_artifact"`), so it reaches tracing but
+  not the model. (2) `RATE_LIMIT_MAX_WAIT_SECONDS` setting (default **15**, `.env.example`)
+  replaces the fixed 10 s. (3) Prompt, complaints: the first sentence acknowledges the problem
+  with empathy (example given), no emoji anywhere, including the closing. (4) Prompt,
+  greeting: only in the first answer; afterwards no "Oi"/"tudo bem?", use the first name
+  naturally. (5) Protocol must be copied exactly.
+- **Step 12 follow-up** — **Groq rejects schema-invalid tool calls with HTTP 400
+  `tool_use_failed`** (seen live: the 120b called `get_order_status` with `order_id: 0` and an
+  empty email before asking; the schema's `minimum: 1` made Groq reject it — without it the
+  call would have counted as a failed identity check). The middleware (renamed
+  `ProviderFallback`) now treats it as recoverable: retry the same model once at once, then the
+  next model; if every model fails → `FAILED_MESSAGE` ("Pode escrever de outro jeito?"). Other
+  400s still propagate. Order tool descriptions now say "call only with the number and email
+  the customer gave".
 - **Step 12** — Known quality gap: when the 120b is rate limited mid-turn the 20b writes the
   answer, and it follows the tone rules less strictly (e.g. an emoji in a complaint in run 2).
   Mitigations if needed: shorter tool descriptions (fewer tokens per call), or the README
@@ -610,6 +628,19 @@ reasoning). `run_turn` becomes a consumer of the stream.
   WhatsApp number (P1). Steps 11/12: contacts must come from `client.yaml` (store status tool /
   prompt), and the prompt must say config contacts win over retrieved text.
 
+- **Invented protocol / duplicate handoff (run 6, 2026-11-02) — needs a decision before
+  step 13.** With the final prompt, the 120b once wrote "Protocolo: 20231102-8745" **without
+  calling `handoff_to_human`** (pedido 8, turn 2), and in the return conversation it opened a
+  handoff without asking and then a second one when the customer confirmed (EMP-20260220-0001
+  and -0002 for the same request). Prompt rules alone don't make this reliable. Proposed
+  deterministic guards (code, not prompt): (a) **protocol guard** — a final answer may only
+  contain protocol numbers issued by `handoff_to_human` in this session; if it mentions an
+  unknown one, re-ask the model once with a correction note, and if it still fails, replace the
+  answer with a safe one; (b) **idempotent handoff** — a second handoff with the same reason in
+  the same session returns the existing protocol (`already_registered: true`).
+  Re-run results (complaint + return, 6 turns): ≈ 3,900 counted tokens/turn; 1 × 15 s wait on
+  the 120b, 0 fallbacks; complaint answers open with empathy and have no emoji; no repeated
+  greeting.
 - **README known limitation (owner, step 9):** installments are `total / n` rounded to cents,
   so n × installment can differ from the total by a few cents (e.g. 7 × R$ 314,14 =
   R$ 2.198,98 for R$ 2.199,00); a real checkout adjusts one installment. List it in README
@@ -799,3 +830,14 @@ reasoning). `run_turn` becomes a consumer of the stream.
   candidate fix: return `days_left` instead of/besides `days_elapsed`; the 120b put an emoji
   in the complaint answer (rule says none) → step 15 eval case; retry-after of 11–13 s just
   missed the 10 s wait threshold → maybe raise to ~15 s (owner's call).
+
+### 2026-11-02 04:00 — Step 12 follow-up: days left, 429 wait, invalid tool calls, prompt rules
+- Done: owner adjustments (days_left + artifact, configurable 15 s wait, complaint and greeting
+  rules, exact protocol); handling of Groq `tool_use_failed` 400s found in the re-run.
+- Files: `.env.example`, `src/emporio_agent/config.py`, `src/emporio_agent/core/agent.py`,
+  `src/emporio_agent/client/{assistant,tools}.py`, `src/emporio_agent/client/prompts/system.md`,
+  `tests/test_{agent,config,orders}.py`, `PROGRESS.md`.
+- Tests: ruff ok, format ok, `pytest -m "not llm"` 223 passed.
+- Live re-runs (complaint + return only): run 5 found the 400 crash and a mis-copied protocol;
+  run 6 found an invented protocol and a duplicate handoff (Known issues). Stopped before
+  step 13 for the owner's decision.

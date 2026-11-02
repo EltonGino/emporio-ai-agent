@@ -58,6 +58,9 @@ class Settings(BaseSettings):
     session_retention_days: int = Field(default=30, ge=1)
     history_max_messages: int = Field(default=20, ge=2)
     history_max_tokens: int = Field(default=2500, ge=200)
+    # On HTTP 429, wait up to this long (provider's retry-after) and retry the same model once;
+    # a longer wait falls back to the next model instead.
+    rate_limit_max_wait_seconds: float = Field(default=15.0, ge=0)
 
     @field_validator("llm_fallback_models", mode="before")
     @classmethod
