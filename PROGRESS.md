@@ -13,16 +13,12 @@ Update this file in the same commit as every plan step (see AGENTS.md §0 and §
 
 ## Next step
 
-Step 13 — `feat(core): event stream and JSONL tracing` (AGENTS.md §8 event list, §13). One
-`AgentEvent` model (`core/events.py`): user_message, token, tool_start, tool_end (result
-preview, duration; tool artifacts such as `search_policies` sections and
-`check_return_eligibility` days_elapsed go to the trace), retrieval, final (text + the turn's
-`TurnUsage`), error; JSONL per session in `data/runtime/traces/`; only `content` is ever
-emitted (never reasoning); `run_turn` becomes a consumer of the stream. Also trace the
-middleware decisions (429 wait/fallback, invalid tool call retry, protocol guard) and the
-**usage of discarded model calls** (a guard re-ask or a failed attempt is not in the final
-messages, so `TurnUsage` misses it today). **Final-answer text must be emitted only after the
-ProtocolGuard has validated it** (see "Protocol guard and streaming").
+Step 14 — `feat(cli): interactive CLI with debug mode` (AGENTS.md §10):
+`uv run emporio-chat [--session ID] [--debug] [--now ISO]` (typer + rich; add the console
+script in pyproject). Consume `core.events.stream_turn` through `core.tracing.traced` with a
+`JsonlTracer(TRACES_DIR)`; `--debug` prints tool_start/tool_end/retrieval/notice events dimmed
+(and the turn's usage from `final`); `/new` starts a new session id, `/exit` quits. Persistent
+memory via `core.agent.sqlite_checkpointer(settings.checkpoint_db)`; `--now` → `get_clock(now)`.
 
 ## Plan status
 
@@ -39,8 +35,8 @@ ProtocolGuard has validated it** (see "Protocol guard and streaming").
 | 9 | Payment rules | done | `feat(tools): payment rules` (ebaa394) |
 | 10 | Order status + return eligibility | done | `feat(tools): order status and return eligibility with identity check` (4d14084); `feat(tools): days since order in order status` (ca153a7) |
 | 11 | Store status, policy search, handoff | done | `feat(tools): store status, policy search and human handoff` (0ebaac7) |
-| 12 | Persona prompt + agent with memory | done | `feat(agent): persona prompt and tool-calling agent with memory` (1dd00d7); `fix(agent): return days left, 429 wait, invalid tool calls and prompt rules` (1a2986e); `feat(agent): protocol guard and idempotent handoff` |
-| 13 | Event stream + JSONL tracing | pending | |
+| 12 | Persona prompt + agent with memory | done | `feat(agent): persona prompt and tool-calling agent with memory` (1dd00d7); `fix(agent): return days left, 429 wait, invalid tool calls and prompt rules` (1a2986e); `feat(agent): protocol guard and idempotent handoff` (f2f29e9) |
+| 13 | Event stream + JSONL tracing | done | `feat(core): event stream and JSONL tracing` |
 | 14 | CLI with debug mode | pending | |
 | 15 | Routing + adversarial evals | pending | |
 | 16 | CI workflow | pending | |
@@ -638,6 +634,35 @@ ProtocolGuard has validated it** (see "Protocol guard and streaming").
   `PRAGMA journal_mode=WAL` and a `busy_timeout` (e.g. 5 s) on every SQLite connection
   (`store.db` via the engine's connect event, and `checkpoints.db`), so readers don't block
   writers with several users at once.
+- **Step 13** — `core/events.py`: one `AgentEvent(type, session_id, at, data)` model, with a
+  free `data` dict per type: `user_message{text}`, `tool_start{name,args}`,
+  `tool_end{name,result_preview (300 chars),duration_ms,status}`, `retrieval{chunks}` (the
+  `search_policies` artifact: section id/path, page, RRF score, matched_by), **`notice`** (new,
+  not in AGENTS.md §8: middleware decisions — `rate_limit` wait/next_model, `invalid_tool_call`
+  retry/next_model, `protocol_guard` retry/safe_answer — and other tool artifacts such as
+  `check_return_eligibility` days_elapsed), `token{text}`, `final{text,usage,duration_ms}`,
+  `error{message,detail}`. `CUSTOMER_EVENTS` = user_message, token, final, error (the API in
+  non-demo mode sends only these, step 17).
+- **Step 13** — `stream_turn(agent, session_id, text)` reads `agent.stream(stream_mode=
+  ["updates","custom"])`: AI messages → usage + tool_start (+ final answer = last AI message
+  without tool calls, `.text` only, never reasoning); tool messages → tool_end (+ retrieval or
+  artifact notice); custom chunks (written by middlewares via `events.notify` →
+  `langgraph.config.get_stream_writer`) → notice. `token` events replay the **validated**
+  final text in word chunks after the graph finishes (owner decision: no live tokens before
+  the ProtocolGuard check). `run_turn` is now a consumer of the stream (same `TurnResult`).
+- **Step 13** — Unexpected errors no longer raise out of a turn: they become an `error` event
+  with a fixed friendly message (`ERROR_MESSAGE`) and `detail` (exception type + text) for the
+  trace; the API must not send `detail` to customers. Tests updated accordingly.
+- **Step 13** — `TurnUsage` moved to `core/events.py`; it now also counts **discarded** model
+  calls reported by the guard (`discarded_usage` in the notice). Calls that failed with
+  429/400 return no usage from the provider, so they can't be counted (only noticed).
+- **Step 13** — `core/tracing.py`: `JsonlTracer(TRACES_DIR)` appends each event as one JSON
+  line to `data/runtime/traces/<session_id>.jsonl` (`token` events skipped — `final` has the
+  text), thread-safe; `delete(session_id)` for LGPD (step 17); session ids must match
+  `[A-Za-z0-9_-]{1,100}` (path traversal blocked). `traced(events, tracer)` writes then
+  yields. LangSmith stays env-only (no code). `TRACES_DIR` added to `config.py`.
+- **Step 13** — Test doubles moved to `tests/fakes.py` (`ScriptedModel`, `ProviderError`,
+  `call`), shared by `test_agent.py` and `test_events.py`.
 - **Convention** — The "Commit" column holds the commit subject; hashes are in `git log`
   (a commit cannot contain its own hash).
 
@@ -665,6 +690,13 @@ ProtocolGuard has validated it** (see "Protocol guard and streaming").
   second 429 on the retried 120b) and opened with the protocol instead of empathy; the return
   handoff used reason `complaint` instead of `other` (AGENTS.md reasons have no "return";
   consider adding one later).
+- **Routing gap seen in the step 13 live trace (→ step 15 eval case):** "Posso trocar um
+  produto com defeito? Qual o prazo?" (a general policy question) made the 120b try an order
+  tool with empty data (two `tool_use_failed` 400s, recovered) and the 20b then asked for
+  order number + email instead of calling `search_policies`. Expected: answer the 30-day
+  defect rule from the manual and only then offer to check a specific order. Add to
+  `evals/routing_cases.yaml`; if it fails there, add a prompt line ("dúvida geral de política
+  → search_policies, sem pedir dados do pedido").
 - **README known limitation (owner, step 9):** installments are `total / n` rounded to cents,
   so n × installment can differ from the total by a few cents (e.g. 7 × R$ 314,14 =
   R$ 2.198,98 for R$ 2.199,00); a real checkout adjusts one installment. List it in README
@@ -877,3 +909,17 @@ ProtocolGuard has validated it** (see "Protocol guard and streaming").
   without EMP- prefix, mis-copied protocol, invalid answer never stored, duplicate handoff,
   two orders → two protocols.
 - Live re-run: see Known issues "Guard run (run 7)".
+
+### 2026-11-02 06:00 — Step 13: Event stream + JSONL tracing
+- Done: pushed the guard commit (owner approval). `core/events.py` (AgentEvent, notify,
+  TurnUsage, stream_turn), `core/tracing.py` (JsonlTracer, trace_path, traced); middleware
+  notices (rate limit, invalid tool call, protocol guard with discarded usage); `run_turn`
+  consumes the stream; `TRACES_DIR`.
+- Files: `src/emporio_agent/core/{events,tracing,agent,guards}.py`,
+  `src/emporio_agent/config.py`, `tests/{fakes,test_events,test_agent}.py`, `PROGRESS.md`.
+- Tests: ruff ok, format ok, `pytest -m "not llm"` 256 passed (event order, retrieval event,
+  artifact notice, reasoning never in any event, rate-limit notice, guard notice + discarded
+  usage, friendly error event, JSONL lines without tokens, session id validation, delete).
+- Live smoke (Groq, 2 turns, traced): JSONL shows user_message, tool_start/end,
+  invalid_tool_call and rate_limit notices (waits of 11 s and 4 s), artifact notice and final
+  with usage (7,647 input / 2,304 cached on the 3-call turn).

@@ -1,10 +1,6 @@
-from types import SimpleNamespace
-from typing import Any
-
 import pytest
-from langchain_core.language_models import BaseChatModel
+from fakes import ProviderError, ScriptedModel, call
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
-from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
@@ -24,39 +20,10 @@ from emporio_agent.core.agent import (
     run_turn,
     trim_history,
 )
+from emporio_agent.core.events import ERROR_MESSAGE
 
 STATIC = "Você é o Tom."
 CONTEXT = "## Agora\nquarta-feira, 25/03/2026 às 10:30."
-
-
-class ScriptedModel(BaseChatModel):
-    """Answers with the next scripted message (or raises it) and records what it was sent."""
-
-    script: list[Any]
-    seen: list[list[Any]] = []
-    name_: str = "scripted"
-
-    @property
-    def _llm_type(self) -> str:
-        return "scripted"
-
-    def bind_tools(self, tools, **kwargs):
-        return self
-
-    def _generate(self, messages, stop=None, run_manager=None, **kwargs) -> ChatResult:
-        self.seen.append(list(messages))
-        step = self.script.pop(0)
-        if isinstance(step, Exception):
-            raise step
-        return ChatResult(generations=[ChatGeneration(message=step)])
-
-
-class ProviderError(Exception):
-    def __init__(self, status_code: int, message: str = "", retry_after: str | None = None):
-        super().__init__(message or f"HTTP {status_code}")
-        self.status_code = status_code
-        headers = {"retry-after": retry_after} if retry_after else {}
-        self.response = SimpleNamespace(headers=headers)
 
 
 def agent_with(*models, tools=(), sleeps=None):
@@ -64,10 +31,6 @@ def agent_with(*models, tools=(), sleeps=None):
     return build_agent(
         list(models), list(tools), STATIC, lambda: CONTEXT, InMemorySaver(), 20, 2500, 15, sleep
     )
-
-
-def call(name: str, args: dict, call_id: str = "c1") -> AIMessage:
-    return AIMessage("", tool_calls=[{"name": name, "args": args, "id": call_id}])
 
 
 # --- session id, memory, output --------------------------------------------------------------
@@ -218,16 +181,18 @@ def test_polite_message_when_every_model_fails_the_tool_call():
     assert run_turn(agent_with(*models), "s1", "oi").text == FAILED_MESSAGE
 
 
-def test_other_bad_requests_propagate():
-    with pytest.raises(ProviderError):
-        run_turn(agent_with(ScriptedModel(script=[ProviderError(400, "bad request")])), "s", "oi")
+def test_other_bad_requests_are_not_retried():
+    first = ScriptedModel(script=[ProviderError(400, "bad request")])
+    second = ScriptedModel(script=[AIMessage("não deveria responder")])
+    assert run_turn(agent_with(first, second), "s", "oi").text == ERROR_MESSAGE
+    assert second.seen == []
 
 
 def test_other_errors_are_not_hidden_by_the_fallback():
     first = ScriptedModel(script=[ProviderError(500)])
     second = ScriptedModel(script=[AIMessage("não deveria responder")])
-    with pytest.raises(ProviderError):
-        run_turn(agent_with(first, second), "s1", "oi")
+    # Not retried on another model; the customer gets a friendly error (details in the trace).
+    assert run_turn(agent_with(first, second), "s1", "oi").text == ERROR_MESSAGE
     assert second.seen == []
 
 

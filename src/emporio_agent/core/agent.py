@@ -20,7 +20,7 @@ import re
 import sqlite3
 import time
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +32,9 @@ from langchain_core.messages.utils import count_tokens_approximately
 from langchain_core.tools import BaseTool
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.sqlite import SqliteSaver
+
+from emporio_agent.core.events import TurnUsage, notify, stream_turn
+from emporio_agent.core.tracing import JsonlTracer, traced
 
 logger = logging.getLogger(__name__)
 
@@ -96,16 +99,20 @@ class ProviderFallback(AgentMiddleware):
         if is_invalid_tool_call(error):
             if retried:
                 logger.warning("invalid tool call on %s: next model", _model_name(request))
+                notify("invalid_tool_call", model=_model_name(request), action="next_model")
                 return None
             logger.info("invalid tool call on %s: retrying", _model_name(request))
+            notify("invalid_tool_call", model=_model_name(request), action="retry")
             return 0.0
         if not is_rate_limit(error):
             raise error
         wait = retry_after(error)
         if retried or wait is None or wait > self.max_wait:
             logger.warning("429 on %s (retry-after %s): next model", _model_name(request), wait)
+            notify("rate_limit", model=_model_name(request), retry_after=wait, action="next_model")
             return None
         logger.info("429 on %s: waiting %.1fs and retrying", _model_name(request), wait)
+        notify("rate_limit", model=_model_name(request), retry_after=wait, action="wait")
         return wait + RETRY_MARGIN_SECONDS
 
     def wrap_model_call(
@@ -257,26 +264,20 @@ def build_agent(
     )
 
 
-@dataclass
-class TurnUsage:
-    """Token usage summed over the model calls of one turn (cached ⊂ input)."""
-
-    input_tokens: int = 0
-    cached_tokens: int = 0
-    output_tokens: int = 0
-    reasoning_tokens: int = 0
-    model_calls: int = 0
-    models: list[str] = field(default_factory=list)
-
-    def add(self, message: AIMessage) -> None:
-        usage = message.usage_metadata or {}
-        self.input_tokens += usage.get("input_tokens", 0)
-        self.output_tokens += usage.get("output_tokens", 0)
-        self.cached_tokens += (usage.get("input_token_details") or {}).get("cache_read", 0)
-        self.reasoning_tokens += (usage.get("output_token_details") or {}).get("reasoning", 0)
-        self.model_calls += 1
-        if model := message.response_metadata.get("model_name"):
-            self.models.append(model)
+def run_turn(agent, session_id: str, text: str, tracer: JsonlTracer | None = None) -> TurnResult:
+    """Send one customer message and return the answer (a consumer of `stream_turn`).
+    `session_id` is the LangGraph thread id: memory and the tools' per-session checks
+    (identity lockout, handoff idempotency) depend on it."""
+    result = TurnResult("", TurnUsage(), [])
+    for event in traced(stream_turn(agent, session_id, text), tracer):
+        if event.type == "tool_start":
+            result.tool_calls.append({"name": event.data["name"], "args": event.data["args"]})
+        elif event.type == "final":
+            result.text = event.data["text"]
+            result.usage = TurnUsage(**event.data["usage"])
+        elif event.type == "error":
+            result.text = event.data["message"]
+    return result
 
 
 @dataclass
@@ -284,19 +285,3 @@ class TurnResult:
     text: str  # what the customer sees: the final message's text, never reasoning
     usage: TurnUsage
     tool_calls: list[dict[str, Any]]
-
-
-def run_turn(agent, session_id: str, text: str) -> TurnResult:
-    """Send one customer message and return the answer. `session_id` is the LangGraph
-    thread id: memory and the tools' per-session checks (identity lockout) depend on it."""
-    config = {"configurable": {"thread_id": session_id}}
-    before = len(agent.get_state(config).values.get("messages", []))
-    state = agent.invoke({"messages": [HumanMessage(text)]}, config)
-    new = state["messages"][before:]
-    usage, tool_calls = TurnUsage(), []
-    for message in new:
-        if isinstance(message, AIMessage):
-            usage.add(message)
-            tool_calls.extend(message.tool_calls)
-    final = new[-1]
-    return TurnResult(final.text if isinstance(final, AIMessage) else "", usage, tool_calls)

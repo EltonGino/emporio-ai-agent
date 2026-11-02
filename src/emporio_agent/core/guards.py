@@ -19,6 +19,8 @@ from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResp
 from langchain_core.messages import AIMessage, AnyMessage, SystemMessage, ToolMessage
 from unidecode import unidecode
 
+from emporio_agent.core.events import notify
+
 logger = logging.getLogger(__name__)
 
 # Date + number anywhere in the text, with or without a prefix: "EMP-20260325-0001",
@@ -96,8 +98,18 @@ class ProtocolGuard(AgentMiddleware):
         issued = issued_protocols(history, self.tool_name)
         return claimed_protocols(answer.text, self.keywords) - issued
 
-    def _corrected(self, request: ModelRequest, invalid: set[str]) -> ModelRequest:
+    def _corrected(
+        self, request: ModelRequest, invalid: set[str], discarded: AIMessage
+    ) -> ModelRequest:
         logger.warning("answer cited protocol(s) never issued: %s; asking again", invalid)
+        # The discarded answer's tokens were spent too: report them for the turn's usage.
+        notify(
+            "protocol_guard",
+            action="retry",
+            invalid=sorted(invalid),
+            discarded_usage=discarded.usage_metadata,
+            model=discarded.response_metadata.get("model_name"),
+        )
         system = request.system_message.text if request.system_message else ""
         note = self.correction_note(invalid)
         return request.override(system_message=SystemMessage(f"{system}\n\n{note}"))
@@ -107,6 +119,12 @@ class ProtocolGuard(AgentMiddleware):
         if answer is None or not self.invalid_protocols(request, answer):
             return response
         logger.warning("protocol still invalid after correction: safe answer")
+        notify(
+            "protocol_guard",
+            action="safe_answer",
+            discarded_usage=answer.usage_metadata,
+            model=answer.response_metadata.get("model_name"),
+        )
         return AIMessage(self.safe_answer)
 
     def wrap_model_call(
@@ -116,7 +134,7 @@ class ProtocolGuard(AgentMiddleware):
         answer = _final_answer(response)
         if answer is None or not (invalid := self.invalid_protocols(request, answer)):
             return response
-        return self._safe(request, handler(self._corrected(request, invalid)))
+        return self._safe(request, handler(self._corrected(request, invalid, answer)))
 
     async def awrap_model_call(
         self, request: ModelRequest, handler: Callable[[ModelRequest], Awaitable[ModelResponse]]
@@ -125,4 +143,4 @@ class ProtocolGuard(AgentMiddleware):
         answer = _final_answer(response)
         if answer is None or not (invalid := self.invalid_protocols(request, answer)):
             return response
-        return self._safe(request, await handler(self._corrected(request, invalid)))
+        return self._safe(request, await handler(self._corrected(request, invalid, answer)))
