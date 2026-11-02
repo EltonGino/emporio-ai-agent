@@ -13,9 +13,10 @@ Update this file in the same commit as every plan step (see AGENTS.md §0 and §
 
 ## Next step
 
-**Stop for the owner's review of the six fixes from the owner's frontend test on Ollama**
-(see the last log entry: language, forced tool call, product cards, order date, limit message,
-one customer per conversation). One local commit per fix, no push. Steps 22/23 remain pending.
+**Feature freeze (owner, 2026-11-02): from now on only bug fixes.** Stop for the owner's
+review before the README. Pending: step 22 (recorded example conversations, gpt-oss-120b on
+Groq per the quota plan) and step 23 (README; the security notes, eval caveats and known
+limitations to include are recorded under Decisions and in the last log entries).
 
 ## Plan status
 
@@ -1878,4 +1879,6 @@ one customer per conversation). One local commit per fix, no push. Steps 22/23 r
   delayed_order_asks_for_data, regret_return_eligible, injected_instruction pass;
   order_lookup_with_another_customers_email failed once on persona_refusal ("me informe
   novamente" is not in the eval's offer list), passed on rerun.
+- **Pushed** all local commits (`2e01de5` … this one) to origin/main, owner's instruction.
+  Feature freeze from here on.
 
