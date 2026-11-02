@@ -36,8 +36,8 @@ review" under Known issues.
 | 12 | Persona prompt + agent with memory | done | `feat(agent): persona prompt and tool-calling agent with memory` (1dd00d7); `fix(agent): return days left, 429 wait, invalid tool calls and prompt rules` (1a2986e); `feat(agent): protocol guard and idempotent handoff` (f2f29e9) |
 | 13 | Event stream + JSONL tracing | done | `feat(core): event stream and JSONL tracing` (f2d2ac8) |
 | 14 | CLI with debug mode | done | `feat(cli): interactive CLI with debug mode` (f8ea8e2); `fix(agent): price guard, alternatives, verified-order handoffs and promotions` (2e40cf1) |
-| 15 | Routing + adversarial evals | prepared (not run) | `test: routing and adversarial eval cases and runner` |
-| 16 | CI workflow | pending | |
+| 15 | Routing + adversarial evals | prepared (not run) | `test: routing and adversarial eval cases and runner` (f544c30) |
+| 16 | CI workflow | done (not yet run on GitHub) | `ci: lint and tests workflow` |
 | 17 | FastAPI (SSE, sessions, rate limit, retention, deletion) | pending | |
 | 18 | Frontend scaffold | pending | |
 | 19 | Chat UI with streaming | pending | |
@@ -747,6 +747,16 @@ review" under Known issues.
   only, **no fallbacks** (so the result says which model was evaluated). The runner itself is
   validated by `tests/test_evals.py` with a scripted model (incl. the real routing gap failing
   `defect_policy_general`). **Not yet run against Groq** (owner: 120b daily quota spent).
+- **Step 16** — `.github/workflows/ci.yml`, three jobs on push to main and on PRs:
+  (1) **fast**: `astral-sh/setup-uv@v6` (uv 0.13.6, Python from `.python-version`),
+  `uv sync --frozen`, ruff check, ruff format --check, `pytest -m "not llm and not
+  embeddings"` (334 tests locally, no model download); (2) **embeddings**: restores
+  `data/runtime/models` with `actions/cache@v4` (key = embedding model + `uv.lock` hash;
+  first run downloads ~1 GB) and runs `pytest -m embeddings` (hybrid hit@3 ≥ 0.85 per style);
+  (3) **frontend**: Node 22, `npm ci && npm run build` in `frontend/`, skipped (step-level
+  `hashFiles` condition) until `frontend/package-lock.json` exists. LLM evals never run in CI.
+  The workflow was validated as YAML and the two pytest selections locally; it has not run on
+  GitHub yet (no push).
 - **Convention** — The "Commit" column holds the commit subject; hashes are in `git log`
   (a commit cannot contain its own hash).
 
@@ -759,9 +769,8 @@ review" under Known issues.
 - **E1 (new data finding, not in AGENTS.md §5.3):** product 130 is `coming_soon`, but appears in
   order 3 (delivered, 2 units) and order 14 (pending). Handling: status wins for new sales
   (D1); past orders are reported as they are. Detected by the profiler; add to README (step 23).
-- The 1 GB embedding model must be available in CI (step 7's hit@3 ≥ 0.85 pytest needs it) and
-  in Docker (step 21): cache it (actions/cache on `data/runtime/models`) / bake it into the
-  image or a volume. CI: two jobs (see "CI split" decision); Docker: decide in step 21.
+- The 1 GB embedding model in Docker (step 21): bake it into the image or a volume — decide
+  in step 21. (CI: done in step 16 with actions/cache.)
 - Chunks are verbatim: chunk 1.2 contains the accented email (P2) and chunk 7 the other
   WhatsApp number (P1). Steps 11/12: contacts must come from `client.yaml` (store status tool /
   prompt), and the prompt must say config contacts win over retrieved text.
@@ -1060,3 +1069,9 @@ review" under Known issues.
   `evals/{routing,adversarial}_cases.yaml`, `scripts/run_evals.py`, `tests/conftest.py`,
   `tests/test_llm_evals.py`, `tests/test_evals.py`, `PROGRESS.md`.
 - Tests: ruff ok, format ok, `pytest -m "not llm"` 335 passed; `-m llm` collects 27 cases.
+
+### 2026-11-02 09:15 — Step 16: CI workflow
+- Done: `.github/workflows/ci.yml` (fast / embeddings / frontend jobs).
+- Files: `.github/workflows/ci.yml`, `PROGRESS.md`.
+- Tests: YAML parses; `pytest -m "not llm and not embeddings"` 334 passed and `pytest -m
+  embeddings` 1 passed locally. Not run on GitHub (no push).

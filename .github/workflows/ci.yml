@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fast:
+    name: Lint and tests (no models)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.13.6"
+          enable-cache: true
+      - name: Install dependencies (Python from .python-version)
+        run: uv sync --frozen
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - name: Tests without the LLM and without the embedding model
+        run: uv run pytest -m "not llm and not embeddings"
+
+  embeddings:
+    name: Retrieval quality (embedding model)
+    runs-on: ubuntu-latest
+    env:
+      EMBEDDING_MODEL: sentence-transformers/paraphrase-multilingual-mpnet-base-v2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.13.6"
+          enable-cache: true
+      - run: uv sync --frozen
+      - name: Restore the embedding model (~1 GB) from cache
+        uses: actions/cache@v4
+        with:
+          path: data/runtime/models
+          key: fastembed-${{ env.EMBEDDING_MODEL }}-${{ hashFiles('uv.lock') }}
+          restore-keys: fastembed-${{ env.EMBEDDING_MODEL }}-
+      - name: Hybrid retrieval hit@3 >= 0.85 per query style (AGENTS.md §6)
+        run: uv run pytest -m embeddings
+
+  frontend:
+    name: Frontend build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        if: hashFiles('frontend/package-lock.json') != ''
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: npm ci && npm run build
+        if: hashFiles('frontend/package-lock.json') != ''
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
