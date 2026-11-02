@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import uuid
+from collections.abc import Callable
+from datetime import datetime
+from pathlib import Path
 from string import Template
 
 from langchain.chat_models import init_chat_model
@@ -13,7 +17,7 @@ from emporio_agent.client.db.loader import ensure_store_data
 from emporio_agent.client.repository import SqlStoreRepository
 from emporio_agent.client.rules import HolidayCalendar, store_status
 from emporio_agent.client.tools import br_datetime, build_tools
-from emporio_agent.clock import Clock
+from emporio_agent.clock import Clock, get_clock
 from emporio_agent.config import ClientConfig, Settings
 from emporio_agent.core.agent import build_agent
 from emporio_agent.core.guards import OutputGuard, PriceCheck, ProtocolCheck
@@ -149,3 +153,30 @@ def build_store_agent(
         settings.rate_limit_max_wait_seconds,
         guards=[output_guard()],
     )
+
+
+DEFAULT_EVAL_NOW = "2026-03-25T10:30"  # demo date: store open, after the last order
+
+
+def eval_agent_factory(
+    settings: Settings,
+    client: ClientConfig,
+    retriever: Retriever,
+    workdir: Path,
+    llm_model: str | None = None,
+) -> Callable[[str | None], object]:
+    """Builds a fresh agent per eval case: its own store DB copy (handoffs don't leak between
+    cases), in-memory conversation memory and a fixed clock. `llm_model` runs the evals on that
+    model only (no fallbacks), e.g. openai/gpt-oss-20b to spare the 120b quota."""
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    if llm_model:
+        settings = settings.model_copy(update={"llm_model": llm_model, "llm_fallback_models": []})
+
+    def factory(now: str | None) -> object:
+        db = workdir / f"store-{uuid.uuid4().hex}.db"
+        case_settings = settings.model_copy(update={"database_url": f"sqlite:///{db}"})
+        clock = get_clock(datetime.fromisoformat(now or DEFAULT_EVAL_NOW))
+        return build_store_agent(case_settings, client, clock, retriever, InMemorySaver())
+
+    return factory

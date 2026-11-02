@@ -13,16 +13,10 @@ Update this file in the same commit as every plan step (see AGENTS.md §0 and §
 
 ## Next step
 
-Step 15 — `test: routing and adversarial evals` (AGENTS.md §14; Decisions "Groq free-tier
-budget" item 7, "Official contacts" item 2, "Catalog search signals" item 2, the step 12
-quality notes, the routing gap under Known issues and **"Eval cases from the owner's manual
-CLI tests"** below). `evals/routing_cases.yaml` (~10+
-prompts → expected / forbidden tools, plus answer checks) and
-`evals/adversarial_cases.yaml` (5–8: prompt reveal, role override, other customer's email,
-wrong-email order lookup, injected instruction, contacts P1/P2). `@pytest.mark.llm`, skipped
-without `GROQ_API_KEY`; pytest option `--llm-model` (e.g. `openai/gpt-oss-20b`) to spare the
-120b quota. Run them through `run_turn`/`stream_turn` with a fresh session per case and a
-temporary DB; pace calls to respect 8K TPM.
+**Owner's overnight order (2026-11-02):** step 15 (preparation only, not run against Groq) →
+step 16 (CI) → steps 18–20 (frontend with a mock API) → **stop**. Steps 17 and 21 are NOT to be
+started until the owner reviews. No pushes (local commits only). See "Overnight run — what to
+review" under Known issues.
 
 ## Plan status
 
@@ -41,8 +35,8 @@ temporary DB; pace calls to respect 8K TPM.
 | 11 | Store status, policy search, handoff | done | `feat(tools): store status, policy search and human handoff` (0ebaac7) |
 | 12 | Persona prompt + agent with memory | done | `feat(agent): persona prompt and tool-calling agent with memory` (1dd00d7); `fix(agent): return days left, 429 wait, invalid tool calls and prompt rules` (1a2986e); `feat(agent): protocol guard and idempotent handoff` (f2f29e9) |
 | 13 | Event stream + JSONL tracing | done | `feat(core): event stream and JSONL tracing` (f2d2ac8) |
-| 14 | CLI with debug mode | done | `feat(cli): interactive CLI with debug mode` (f8ea8e2); `fix(agent): price guard, alternatives, verified-order handoffs and promotions` |
-| 15 | Routing + adversarial evals | pending | |
+| 14 | CLI with debug mode | done | `feat(cli): interactive CLI with debug mode` (f8ea8e2); `fix(agent): price guard, alternatives, verified-order handoffs and promotions` (2e40cf1) |
+| 15 | Routing + adversarial evals | prepared (not run) | `test: routing and adversarial eval cases and runner` |
 | 16 | CI workflow | pending | |
 | 17 | FastAPI (SSE, sessions, rate limit, retention, deletion) | pending | |
 | 18 | Frontend scaffold | pending | |
@@ -722,6 +716,37 @@ temporary DB; pace calls to respect 8K TPM.
   R$ 109,95") and prices recalled from earlier turns without a new lookup (stricter, by design:
   the prompt already requires a tool call in the turn). Notice kind is now `output_guard` with
   `failures: {check: [...]}`. Prompt grew to ≈ 1,350 tokens (chars/4) with these rules.
+- **Plan order change (owner, 2026-11-02):** steps 18–20 (frontend) are built **before** step
+  17 (API), against a mock API client (`VITE_MOCK=true`) that replays real conversations
+  converted from JSONL traces. The contract is `AgentEvent` (step 13) + AGENTS.md §11
+  endpoints, so step 17 must implement exactly what the frontend's real client calls.
+- **Step 15 (prepared, not run)** — `src/emporio_agent/core/evals.py` (client-agnostic):
+  `EvalCase(id, turns, expect, now, note)`, `load_cases` (rejects unknown expectation keys),
+  `run_conversation` (one fresh session; collects tool calls, notices, answers, errors, input
+  tokens from `stream_turn`), `check(expect, transcript)`, `run_case(case, agent_factory,
+  pace)`. Expectations: tools_any, tools_all, forbidden_tools, first_tool_in, no_tools (whole
+  conversation); answer_contains / answer_contains_any (last answer); answer_not_contains /
+  answer_not_matches (every answer); no_emoji (last answer); no_guard_failures (the output
+  guard never had to correct). Text checks: unidecode + casefold, so "e‑mail" (U+2011) =
+  "e-mail". A turn `error` event fails the case.
+- **Step 15** — Cases: `evals/routing_cases.yaml` (19) and `evals/adversarial_cases.yaml` (8)
+  include every case recorded here: official WhatsApp/e-mail (P1/P2), "cordas" vs "violão de
+  7 cordas", defect policy general question (first tool `search_policies`, no order tools,
+  "30 dias"), Ibanez Bass 2X alternatives (no invented SR500/GSR200), no name in a new
+  session, "pedido atrasado" asks for data (no handoff), ukulele promotion (CK-20 and
+  KAL-700T), complaint without emoji (+ protocol + "24 horas úteis"), plus AGENTS.md §14
+  (Martin D-28 price, prompt reveal, role override, other customer's e-mail, wrong-email
+  lookup, injected instruction) and extras (GD20 PIX, Black Friday, Dourados, Sunday, regret
+  return, lookup by customer name, insisted wrong WhatsApp, fake protocol request).
+- **Step 15** — Running them: `uv run pytest -m llm tests/test_llm_evals.py [--llm-model
+  openai/gpt-oss-20b] [--eval-pace 20]` (skipped without GROQ_API_KEY) or `uv run python
+  scripts/run_evals.py [--llm-model ...] [--cases a,b] [--suite routing|adversarial|all]
+  [--pace 20]` (prints PASS/FAIL + JSON report in `data/runtime/evals/`).
+  `client.assistant.eval_agent_factory`: a fresh store DB copy per case (handoffs don't leak),
+  in-memory memory, fixed clock (case `now` or 2026-03-25T10:30); `--llm-model` = that model
+  only, **no fallbacks** (so the result says which model was evaluated). The runner itself is
+  validated by `tests/test_evals.py` with a scripted model (incl. the real routing gap failing
+  `defect_policy_general`). **Not yet run against Groq** (owner: 120b daily quota spent).
 - **Convention** — The "Commit" column holds the commit subject; hashes are in `git log`
   (a commit cannot contain its own hash).
 
@@ -1027,3 +1052,11 @@ temporary DB; pace calls to respect 8K TPM.
   `tests/test_{catalog,guards,agent,events,store_tools,db_loader,cli}.py`, `PROGRESS.md`.
 - Tests: ruff ok, format ok, `pytest -m "not llm"` 293 passed.
 - Live re-run: see Known issues "Re-run of the 4 scenarios".
+
+### 2026-11-02 09:00 — Step 15 (prepared): routing and adversarial eval cases and runner
+- Done: eval runner, 27 cases, pytest `llm` tests with `--llm-model`/`--eval-pace`, script.
+  Not run against the provider (owner instruction).
+- Files: `src/emporio_agent/core/evals.py`, `src/emporio_agent/client/assistant.py`,
+  `evals/{routing,adversarial}_cases.yaml`, `scripts/run_evals.py`, `tests/conftest.py`,
+  `tests/test_llm_evals.py`, `tests/test_evals.py`, `PROGRESS.md`.
+- Tests: ruff ok, format ok, `pytest -m "not llm"` 335 passed; `-m llm` collects 27 cases.

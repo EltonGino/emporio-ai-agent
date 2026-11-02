@@ -1,0 +1,154 @@
+# End-to-end routing evals: does the agent call the right tools and answer with the right facts?
+# Run: uv run pytest -m llm tests/test_llm_evals.py [--llm-model openai/gpt-oss-20b]
+#      or uv run python scripts/run_evals.py [--llm-model ...] [--cases id1,id2]
+# Expectations: see src/emporio_agent/core/evals.py (tool checks cover the whole conversation,
+# answer checks the last answer; text checks ignore accents and case).
+
+cases:
+  # --- catalog and payments ------------------------------------------------------------------
+  - id: price_martin
+    turns: ["quanto custa o Martin D-28?"]
+    expect:
+      tools_any: [search_products]
+      answer_contains: ["11.499"]
+      no_guard_failures: true
+
+  - id: guitars_under_1000
+    turns: ["Quais violões vocês têm até R$ 1.000?"]
+    expect:
+      tools_any: [search_products]
+      answer_contains: ["R$"]
+      answer_not_contains: ["GF-3D"]  # out of stock: not offered as available
+      no_guard_failures: true
+
+  - id: gd20_pix_installments
+    turns: ["Quanto fica o Takamine GD20 no PIX e em quantas vezes posso parcelar?"]
+    expect:
+      tools_all: [calculate_payment_options]
+      answer_contains: ["2.089,05", "12x"]
+      no_guard_failures: true
+
+  - id: expired_black_friday
+    note: "Expired promotion: say it is not active and show the current price."
+    turns: ["Vi que o Martin D-28 tava com 15% na Black Friday, ainda vale?"]
+    expect:
+      tools_any: [search_products, list_active_promotions, get_product_details]
+      answer_contains: ["11.499"]
+
+  - id: ukulele_promotion
+    note: "Owner's manual test: only one of the two ukuleles on sale was cited."
+    turns: ["tem ukulele em promoção?"]
+    expect:
+      tools_any: [list_active_promotions, search_products]
+      answer_contains: ["CK-20", "KAL-700T"]
+      no_guard_failures: true
+
+  - id: discontinued_with_alternatives
+    note: "Owner's manual test: the model invented 4 basses with prices after an empty search."
+    turns: ["tem o Giannini GF-3D?", "e o Ibanez Bass 2X?"]
+    expect:
+      tools_any: [search_products]
+      answer_contains_any: ["descontinuado", "saiu do catalogo", "nao trabalhamos mais"]
+      answer_not_contains: ["SR500", "GSR200"]
+      no_guard_failures: true
+
+  # --- accessories and scope -----------------------------------------------------------------
+  - id: strings_accessory
+    note: "Accessories are not sold: explain and ask if the customer wants an instrument."
+    turns: ["Vocês vendem cordas?"]
+    expect:
+      forbidden_tools: [calculate_payment_options, get_product_details]
+      answer_contains: ["instrumento"]
+
+  - id: seven_string_guitar
+    note: "'cordas' here is part of an instrument name: a real product search."
+    turns: ["quero um violão de 7 cordas"]
+    expect:
+      tools_any: [search_products]
+      answer_contains: ["7 cordas"]
+      no_guard_failures: true
+
+  - id: unrelated_topic
+    turns: ["quem ganhou o jogo do Flamengo ontem?"]
+    expect:
+      no_tools: true
+      answer_contains: ["instrumento"]
+
+  # --- policies ------------------------------------------------------------------------------
+  - id: defect_policy_general
+    note: >-
+      Owner decision: answer the general rule via search_policies (30 days from purchase),
+      then offer to check a specific order, without requiring the order data first.
+    turns: ["Posso trocar um produto com defeito? Qual o prazo?"]
+    expect:
+      first_tool_in: [search_policies]
+      forbidden_tools: [get_order_status, check_return_eligibility]
+      answer_contains: ["30 dias"]
+
+  - id: shipping_other_city
+    turns: ["quanto tempo demora pra chegar em Dourados?"]
+    expect:
+      first_tool_in: [search_policies]
+      answer_contains: ["dias uteis"]
+
+  - id: sunday_hours
+    turns: ["vocês abrem domingo?"]
+    expect:
+      tools_any: [get_store_status, search_policies]
+      answer_contains_any: ["fechad", "nao abrimos", "nao abre"]
+
+  - id: official_whatsapp
+    note: "P1: the manual also has (67) 3321-4500; the official one comes from client.yaml."
+    turns: ["qual o WhatsApp de vocês?"]
+    expect:
+      answer_contains: ["3341-4444"]
+      answer_not_contains: ["3321-4500"]
+
+  - id: official_email
+    note: "P2: the manual has an accented typo in the email."
+    turns: ["qual o e-mail da loja?"]
+    expect:
+      answer_contains: ["contato@emporiodamusica.com.br"]
+      answer_not_matches: ["empóriodamusica"]
+
+  # --- orders, returns, complaints -----------------------------------------------------------
+  - id: delayed_order_asks_for_data
+    note: "Owner's manual test: a handoff was opened with order_id 0 before any lookup."
+    turns: ["Tô com um pedido atrasado"]
+    expect:
+      forbidden_tools: [handoff_to_human]
+      answer_contains: ["pedido"]
+      answer_contains_any: ["e-mail", "email"]
+
+  - id: delayed_order_flow
+    now: "2026-03-25T10:30"
+    turns: ["Meu pedido 8 tá atrasado, o e-mail é anacarol.ferreira@coldmail.com"]
+    expect:
+      tools_any: [get_order_status]
+      answer_contains: ["28/02/2026"]
+      answer_not_matches: ["\\d{8}-\\d{3,}"]  # no protocol before the customer agrees
+
+  - id: complaint_no_emoji
+    now: "2026-03-25T10:30"
+    turns:
+      - "Pedido 8, e-mail anacarol.ferreira@coldmail.com"
+      - "Isso é um absurdo, já era pra ter chegado. Quero registrar uma reclamação."
+    expect:
+      tools_all: [get_order_status, handoff_to_human]
+      answer_contains: ["EMP-", "24 horas uteis"]
+      no_emoji: true
+      no_guard_failures: true
+
+  - id: regret_return_eligible
+    now: "2026-02-20T10:00"
+    turns: ["Me arrependi da compra, posso devolver? Pedido 7, leticia.rocha@jmail.com"]
+    expect:
+      tools_any: [check_return_eligibility]
+      answer_contains: ["24/02/2026"]
+
+  - id: no_name_in_a_new_session
+    note: "Owner's manual test: a name from a prompt example was used ('Ana')."
+    turns: ["Oi! Você sabe meu nome?"]
+    expect:
+      no_tools: true
+      answer_not_contains: ["Ana", "Leticia", "Bruno", "Lucas", "Pedro"]
