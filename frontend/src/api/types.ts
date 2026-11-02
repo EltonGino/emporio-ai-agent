@@ -10,6 +10,7 @@ export type EventType =
   | 'token'
   | 'final'
   | 'error'
+  | 'products'
 
 export interface AgentEvent {
   type: EventType
@@ -36,7 +37,17 @@ export interface RetrievedChunk {
 }
 
 /** GET /api/config */
+export interface ProductCard {
+  id: number
+  name: string
+  price_text?: string
+  availability: string
+  pix_price_text?: string
+  promo?: { percent: number; final_price_text: string }
+}
+
 export interface AppConfig {
+  store_status?: { is_open: boolean; closes_at?: string; next_opening?: string }
   assistant_name: string
   store_name: string
   slogan: string

@@ -1,37 +1,35 @@
 @import 'tailwindcss';
-@import '@fontsource-variable/fraunces';
+@import '@fontsource/oswald/400.css';
+@import '@fontsource/oswald/600.css';
 @import '@fontsource/source-sans-3/400.css';
 @import '@fontsource/source-sans-3/600.css';
 @import '@fontsource/jetbrains-mono/400.css';
 
-/*
- * Palette from instrument woods: ivory/spruce backgrounds, walnut text, amber (lacquer)
- * accent and a burgundy (rosewood) for emphasis. Text colours are checked for WCAG AA on
- * their backgrounds (walnut on ivory ≈ 13:1, burgundy on ivory ≈ 9:1, ivory on burgundy ≈ 9:1).
- * The "Bastidores" panel uses a dark console palette on purpose: internal, not customer-facing.
- */
+/* Vintage amplifier palette. Contrast ratios recorded in PROGRESS.md.
+   Amber is reserved for indicator LEDs; customer text uses ink or rust. */
 @theme {
-  --font-display: 'Fraunces Variable', Georgia, serif;
+  --font-display: 'Oswald', 'Arial Narrow', sans-serif;
   --font-sans: 'Source Sans 3', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, monospace;
 
-  --color-ivory: #f8f1e4;
-  --color-cream: #fffaf0;
-  --color-spruce: #efe2c8;
-  --color-maple: #e2cfa8;
-  --color-walnut: #3b2618;
-  --color-walnut-soft: #6b4f3a;
-  --color-amber: #b5651d;
-  --color-amber-deep: #8f4a12;
-  --color-burgundy: #7a2e1f;
-  --color-burgundy-deep: #5c1f14;
+  --color-tolex: #1c1a17;
+  --color-ivory: #efe6d2;
+  --color-cream: #fbf7ee;
+  --color-spruce: #efe6d2;
+  --color-maple: #c9b88f;
+  --color-walnut: #2a2620;
+  --color-walnut-soft: #615747;
+  --color-amber: #f0a020;
+  --color-amber-deep: #9a3412;
+  --color-burgundy: #9a3412;
+  --color-burgundy-deep: #9a3412;
 
-  --color-console: #17120e;
+  --color-console: #1c1a17;
   --color-console-line: #2c241d;
   --color-console-text: #e8dccb;
   --color-console-dim: #a8957f;
   --color-console-green: #9ccc65;
-  --color-console-amber: #f0b45a;
+  --color-console-amber: #f0a020;
   --color-console-red: #ef8a7a;
 }
 
@@ -51,23 +49,43 @@ body {
 }
 
 :focus-visible {
-  outline: 3px solid var(--color-amber);
+  outline: 3px solid var(--color-burgundy);
   outline-offset: 2px;
 }
 
-/* Header like a wooden shop sign: walnut with a faint grain. */
-.wood-sign {
-  background-color: var(--color-walnut);
+/* Subtle tolex grain, drawn locally without brand assets. */
+.tolex-header {
+  background-color: var(--color-tolex);
   background-image:
-    repeating-linear-gradient(
-      100deg,
-      rgb(255 255 255 / 0.025) 0 2px,
-      transparent 2px 9px
-    ),
-    linear-gradient(180deg, #4a3020, var(--color-walnut));
-  border-bottom: 3px solid var(--color-amber);
+    repeating-linear-gradient(25deg, #ffffff04 0 1px, transparent 1px 4px),
+    repeating-linear-gradient(115deg, #00000020 0 1px, transparent 1px 5px);
+  border-bottom: 3px solid var(--color-maple);
 }
-
+.led {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: currentColor;
+  box-shadow: 0 0 5px currentColor;
+}
+.chat-markdown a {
+  color: var(--color-burgundy);
+  text-decoration: underline;
+}
+.product-price {
+  font-family: var(--font-display);
+  color: var(--color-burgundy);
+}
+.product-card {
+  background: var(--color-cream);
+  border: 1px solid var(--color-maple);
+  border-left: 3px solid var(--color-tolex);
+  border-radius: 8px;
+  padding: 12px 16px;
+  min-width: 0;
+}
 /* Markdown inside chat bubbles (react-markdown output). */
 .chat-markdown p + p,
 .chat-markdown p + ul,
@@ -87,5 +105,15 @@ body {
 }
 .chat-markdown strong {
   font-weight: 600;
+  font-family: var(--font-display);
   color: var(--color-burgundy-deep);
+}
+
+@media (max-width: 639px) {
+  #root { height: 100dvh; }
+}
+
+.tolex-header :focus-visible,
+aside :focus-visible {
+  outline-color: var(--color-maple);
 }

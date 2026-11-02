@@ -13,10 +13,10 @@ Update this file in the same commit as every plan step (see AGENTS.md §0 and §
 
 ## Next step
 
-Continue the owner-authorized vintage-amplifier frontend redesign. The API changes below
-are ready; finish the frontend commit with screenshots and validation, then stop for review.
-Do not push. Starting HEAD was the owner-approved/pushed `07ce0e1`; the working tree was clean.
-Steps 22/23 and broader LLM evals remain outside this follow-up.
+**Stop for the owner's review of the vintage-amplifier redesign.** Two local commits cover
+public API status/product events and the frontend. No push. Review `frontend/screenshots/`
+(`vintage-*.png`, gitignored); desktop/mobile, demo/customer mode and real product cards.
+Starting approved/pushed HEAD was `07ce0e1`. Steps 22/23 and broader evals remain pending.
 
 ## Plan status
 
@@ -1610,3 +1610,37 @@ Steps 22/23 and broader LLM evals remain outside this follow-up.
   GD20: R$ 2.199,00 / R$ 2.089,05 PIX; Ohana CK-20: R$ 549,00 / 20% / R$ 439,20.
   Customer-mode API also returned the GD20 card and Sunday reopening status correctly.
 - Next: commit the frontend presentation and review screenshots, then stop. No push.
+
+
+### 2026-11-02 — Vintage redesign: frontend and real-API screenshots
+- Warm tolex header/customer bubbles/chips (#1c1a17); cream chat (#efe6d2), Tom bubbles
+  (#fbf7ee), grill-cloth trim (#c9b88f), rust prices/links (#9a3412), ink (#2a2620).
+  Original plain T knob monogram/favicon, subtle CSS grain; no real amplifier branding.
+  Oswald (OFL) replaces Fraunces for headings and card prices; Source Sans 3 and JetBrains
+  Mono remain. All fonts ship via Fontsource/Vite assets, with no Google Fonts requests.
+- Header LED/status comes from `/api/config`; refreshes every minute for long conversations.
+  Sunday correctly shows "Loja fechada · abre seg. às 9h". Welcome explicitly welcomes beginners.
+  Product cards render below validated messages, using only the public SSE payload; promotional
+  cards show original price + percentage, PIX only when applicable (no extra promo discount).
+- Dark monospace Bastidores retains tool args/results, retrieval, latency and guard notices.
+  LEDs: amber tools, green successful results, red errors/guards. Status remains textual too.
+  Amber is restricted to indicators; customer text/focus use ink/rust (light focus on dark).
+- WCAG relative-luminance contrast measurements (normal-text AA >= 4.5): ink/chat **12.12:1**,
+  ink/Tom **14.06:1**, rust/chat **5.89:1**, rust/Tom **6.83:1**, cream/tolex **16.24:1**,
+  beige/tolex **8.88:1**, muted/chat **5.71:1**, muted/Tom **6.63:1**,
+  console muted/tolex **6.01:1**, console text/tolex **12.84:1**. Input boundary uses muted ink
+  for sufficient non-text contrast; beige borders are decorative. Disabled controls exempt.
+- Chrome headless screenshots against the real built FastAPI app + Ollama only, never Groq:
+  `http://elton:11434`, `gpt-oss:20b`. Demo clock 2026-03-25 10:30; customer mode Sunday
+  2026-03-29 10:30. Checked GD20 PIX and Ohana CK-20 promotion; no fabricated fixture replay.
+  Desktop 1440x1000, phone 390x844 @2x; extra 320px check. Card bounds stay within viewport at
+  320/375/390 px. The mobile toggle uses a short label to avoid widening the viewport.
+- Review images in `frontend/screenshots/` (gitignored): `vintage-desktop-{demo,chat,produto,
+  produto-bastidores,promocao,cliente}.png`, `vintage-mobile-{chat,demo,produto,bastidores,
+  cliente,320}.png`. Customer-mode DOM has neither Bastidores nor its toggle; closed header
+  and card shown together. Desktop side panel and phone drawer inspected visually.
+- Validation: frontend build + lint, ruff check/format, full non-LLM suite **446 passed**,
+  28 deselected. No additional official-model eval or deliverable recording was run.
+- Commit note: API commit fd22998's explanatory body contains literal `\n` separators due
+  to shell quoting; left untouched to preserve history. This frontend commit uses a message file.
+- Next: stop for owner review. No push; do not proceed to steps 22/23 without authorization.

@@ -24,7 +24,7 @@ function Bubble({ message, assistantName }: { message: ChatMessage; assistantNam
   if (message.role === 'user') {
     return (
       <div className="flex justify-end">
-        <p className="max-w-[85%] rounded-2xl rounded-br-sm bg-burgundy px-4 py-2.5 whitespace-pre-wrap text-ivory shadow-sm sm:max-w-[75%]">
+        <p className="max-w-[85%] rounded-2xl rounded-br-sm bg-tolex px-4 py-2.5 whitespace-pre-wrap text-ivory shadow-sm sm:max-w-[75%]">
           {message.text}
         </p>
       </div>
@@ -36,13 +36,30 @@ function Bubble({ message, assistantName }: { message: ChatMessage; assistantNam
       <Monogram size={32} className="mb-1 shrink-0" />
       <div
         className={
-          'chat-markdown max-w-[85%] rounded-2xl rounded-bl-sm border px-4 py-2.5 shadow-sm sm:max-w-[75%] ' +
+          'chat-markdown min-w-0 max-w-[85%] rounded-2xl rounded-bl-sm border px-4 py-2.5 shadow-sm sm:max-w-[75%] ' +
           (message.status === 'error'
             ? 'border-burgundy/40 bg-[#fbe9e4] text-burgundy-deep'
             : 'border-maple bg-cream text-walnut')
         }
       >
         {waiting ? <TypingDots name={assistantName} /> : <Markdown>{message.text}</Markdown>}
+        {message.status === 'done' && message.products?.length ? (
+          <div className="mt-4 grid min-w-0 gap-2" aria-label="Produtos citados">
+            {message.products.map((p) => <article className="product-card" key={p.id}>
+              <h3 className="break-words font-display text-xl">{p.name}</h3>
+              {p.promo ? <p className="mt-1 text-sm text-walnut-soft">
+                <s>{p.price_text}</s> <span className="ml-2 font-semibold text-burgundy">{p.promo.percent}% de desconto</span>
+              </p> : null}
+              <p className="product-price mt-1 text-2xl">{p.promo?.final_price_text ?? p.price_text}</p>
+              {p.pix_price_text ? <p className="text-sm text-burgundy">{p.pix_price_text} no PIX</p> : null}
+              <p className="mt-2 flex items-center gap-2 text-sm text-walnut-soft">
+                <span className="led text-tolex" aria-hidden="true" />
+                {{ disponivel: 'Disponível', esgotado: 'Temporariamente indisponível',
+                  descontinuado: 'Fora de catálogo', em_breve: 'Chega em breve' }[p.availability] ?? p.availability}
+              </p>
+            </article>)}
+          </div>
+        ) : null}
       </div>
     </div>
   )
@@ -61,7 +78,7 @@ export function MessageList({
   const last = messages.at(-1)
   useEffect(() => {
     end.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
-  }, [messages.length, last?.text])
+  }, [messages.length, last?.text, last?.products])
 
   return (
     <div className="flex-1 overflow-y-auto" aria-live="polite" aria-relevant="additions text">

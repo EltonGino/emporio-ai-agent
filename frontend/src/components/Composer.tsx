@@ -31,7 +31,7 @@ export function Composer({ busy, onSend }: { busy: boolean; onSend: (text: strin
         }}
         placeholder="Escreva sua mensagem…"
         maxLength={1000}
-        className="max-h-40 min-h-12 flex-1 resize-none rounded-2xl border border-maple bg-cream px-4 py-3 text-walnut placeholder:text-walnut-soft/70 focus:border-amber"
+        className="max-h-40 min-h-12 min-w-0 flex-1 resize-none rounded-2xl border border-walnut-soft bg-cream px-4 py-3 text-walnut placeholder:text-walnut-soft focus:border-walnut"
       />
       <button
         type="submit"

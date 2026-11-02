@@ -1,6 +1,8 @@
+import type { AppConfig } from '../api'
 import { Monogram } from './Monogram'
 
 interface Props {
+  storeStatus?: AppConfig['store_status']
   storeName: string
   slogan: string
   assistantName: string
@@ -16,7 +18,7 @@ const buttonClass =
 
 export function Header(props: Props) {
   return (
-    <header className="wood-sign relative z-10 text-ivory shadow-md">
+    <header className="tolex-header relative z-10 text-ivory shadow-md">
       <div className="flex flex-col gap-2.5 px-4 py-3 sm:flex-row sm:items-center sm:gap-4 sm:px-6">
         <div className="flex min-w-0 flex-1 items-center gap-3">
           <Monogram size={40} className="shrink-0 drop-shadow sm:size-11" />
@@ -24,12 +26,9 @@ export function Header(props: Props) {
             <h1 className="truncate font-display text-xl leading-tight font-semibold tracking-tight sm:text-2xl">
               {props.storeName}
             </h1>
-            <p className="truncate text-sm text-maple">
-              <span className="italic">{props.slogan}</span>
-              <span className="hidden sm:inline">
-                {' '}
-                · Atendimento com o {props.assistantName}, assistente virtual
-              </span>
+            <p className="mt-1 flex items-center gap-2 text-sm text-maple">
+              <span className="led text-amber" aria-hidden="true" />
+              {statusLabel(props.storeStatus)}
             </p>
           </div>
         </div>
@@ -52,4 +51,18 @@ export function Header(props: Props) {
       </div>
     </header>
   )
+}
+
+function statusLabel(status: AppConfig['store_status']): string {
+  if (!status) return 'Atendimento virtual · Sua música começa aqui.'
+  const hour = (value: string) => value.replace(':00', 'h').replace(/^(0)(\d)/, '$2')
+  if (status.is_open) return `Loja aberta · fecha às ${hour(status.closes_at ?? '')}`
+  if (!status.next_opening) return 'Loja fechada'
+  const day = status.next_opening.split(' ')[0]
+  const time = status.next_opening.split(' ').at(-1) ?? ''
+  const short: Record<string, string> = {
+    'segunda-feira,': 'seg.', 'terça-feira,': 'ter.', 'quarta-feira,': 'qua.',
+    'quinta-feira,': 'qui.', 'sexta-feira,': 'sex.', 'sábado,': 'sáb.', 'domingo,': 'dom.',
+  }
+  return `Loja fechada · abre ${short[day] ?? day} às ${hour(time)}`
 }

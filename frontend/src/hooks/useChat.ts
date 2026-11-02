@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ApiError, type AgentEvent, type ApiClient, type AppConfig } from '../api'
+import { ApiError, type AgentEvent, type ApiClient, type AppConfig, type ProductCard } from '../api'
 
 export interface ChatMessage {
   id: string
   role: 'user' | 'assistant'
   text: string
+  products?: ProductCard[]
   status: 'streaming' | 'done' | 'error'
 }
 
@@ -49,12 +50,16 @@ export function useChat(client: ApiClient) {
   const busyRef = useRef(false)
 
   useEffect(() => {
-    client
-      .getConfig()
-      .then(setConfig)
-      .catch((error: unknown) =>
-        setConfigError(error instanceof Error ? error.message : 'Falha ao carregar.'),
-      )
+    let active = true
+    client.getConfig().then((value) => { if (active) setConfig(value) })
+      .catch((error: unknown) => {
+        if (active) setConfigError(error instanceof Error ? error.message : 'Falha ao carregar.')
+      })
+    // Refresh opening hours for long conversations; a temporary refresh error keeps the chat usable.
+    const timer = window.setInterval(() => {
+      client.getConfig().then((value) => { if (active) setConfig(value) }).catch(() => {})
+    }, 60_000)
+    return () => { active = false; window.clearInterval(timer) }
   }, [client])
 
   const send = useCallback(
@@ -84,6 +89,9 @@ export function useChat(client: ApiClient) {
         switch (event.type) {
           case 'token':
             patchAnswer((m) => ({ ...m, text: m.text + String(event.data.text ?? '') }))
+            return
+          case 'products':
+            patchAnswer((m) => ({ ...m, products: event.data.products as ProductCard[] }))
             return
           case 'final':
             patchAnswer((m) => ({ ...m, text: String(event.data.text ?? ''), status: 'done' }))

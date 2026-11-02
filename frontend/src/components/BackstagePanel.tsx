@@ -15,7 +15,7 @@ function Row({ mark, tone, children }: { mark: string; tone: string; children: R
   return (
     <li className="flex gap-2">
       <span className={`w-4 shrink-0 text-center ${tone}`} aria-hidden="true">
-        {mark}
+        <span className="led mt-1.5" title={mark} />
       </span>
       <div className="min-w-0 flex-1 break-words">{children}</div>
     </li>
@@ -56,13 +56,13 @@ function EventRow({ event }: { event: AgentEvent }) {
     case 'tool_start':
       return (
         <Row mark="▸" tone="text-console-amber">
-          <span className="text-console-amber">{String(data.name)}</span>
+          <span className="text-console-text">{String(data.name)}</span>
           <span className="text-console-dim"> {json(data.args)}</span>
         </Row>
       )
     case 'tool_end':
       return (
-        <Row mark="✓" tone="text-console-green">
+        <Row mark="✓" tone={data.status === 'error' ? 'text-console-red' : 'text-console-green'}>
           <details>
             <summary className="cursor-pointer">
               {String(data.name)} <span className="text-console-dim">· {String(data.duration_ms)} ms</span>
@@ -125,7 +125,7 @@ export function BackstagePanel({ turns, onClose }: { turns: Turn[]; onClose: () 
     >
       <header className="flex items-start justify-between gap-3 border-b border-console-line px-4 py-3">
         <div>
-          <h2 className="text-sm font-semibold tracking-wide text-console-amber">$ bastidores</h2>
+          <h2 className="text-sm font-semibold tracking-wide text-console-text">Bastidores · rack de efeitos</h2>
           <p className="mt-0.5 text-[11px] text-console-dim">
             Visível apenas no modo demo — clientes não veem este painel
           </p>
@@ -156,7 +156,7 @@ export function BackstagePanel({ turns, onClose }: { turns: Turn[]; onClose: () 
               {turn.durationMs !== undefined ? (
                 <span className="shrink-0 text-console-dim">{seconds(turn)} s</span>
               ) : (
-                <span className="shrink-0 animate-pulse text-console-amber">…</span>
+                <span className="shrink-0 animate-pulse text-console-text">…</span>
               )}
             </header>
             <ol className="space-y-1.5 px-3 py-2">

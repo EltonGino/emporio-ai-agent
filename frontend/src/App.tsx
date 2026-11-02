@@ -56,9 +56,9 @@ export default function App() {
   const welcome = (
     <div className="mx-auto mt-6 max-w-xl text-center sm:mt-12">
       <Monogram size={72} className="mx-auto" />
-      <h2 className="mt-4 font-display text-3xl text-burgundy">Oi! Eu sou o {assistant}.</h2>
+      <h2 className="mt-4 font-display text-3xl text-burgundy">Sua música começa aqui.</h2>
       <p className="mt-2 text-walnut-soft">
-        Assistente virtual do {config?.store_name ?? 'Empório da Música'}. Posso ajudar com
+        Eu sou o {assistant}, assistente virtual do {config?.store_name ?? 'Empório da Música'}. Começando agora ou já toca? Posso ajudar com
         instrumentos, preços, formas de pagamento, pedidos, trocas e horários da loja.
       </p>
     </div>
@@ -67,6 +67,7 @@ export default function App() {
   return (
     <div className="flex h-full flex-col">
       <Header
+        storeStatus={config?.store_status}
         storeName={config?.store_name ?? 'Empório da Música'}
         slogan={config?.slogan ?? 'Sua música começa aqui.'}
         assistantName={assistant}
@@ -79,9 +80,10 @@ export default function App() {
               type="button"
               aria-pressed={panelOpen}
               onClick={() => setPanelOpen((open) => !open)}
-              className="flex-1 rounded-full bg-console px-2.5 py-1.5 font-mono text-xs whitespace-nowrap text-console-amber ring-1 ring-console-amber/40 transition hover:ring-console-amber sm:flex-none sm:px-4 sm:text-sm"
+              className="flex-1 rounded-full bg-console px-2.5 py-1.5 font-mono text-xs whitespace-nowrap text-console-text ring-1 ring-console-amber/40 transition hover:ring-console-amber sm:flex-none sm:px-4 sm:text-sm"
             >
-              {panelOpen ? 'Ocultar bastidores' : 'Bastidores'}
+              <span className="sm:hidden">Bastidores</span>
+              <span className="hidden sm:inline">{panelOpen ? 'Ocultar bastidores' : 'Bastidores'}</span>
             </button>
           ) : null
         }
