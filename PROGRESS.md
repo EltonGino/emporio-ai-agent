@@ -13,12 +13,11 @@ Update this file in the same commit as every plan step (see AGENTS.md §0 and §
 
 ## Next step
 
-**Waiting for the owner's review of step 17** (API). Then step 21 —
-`build: serve frontend from API, Dockerfile and compose` (the API already serves
-`frontend/dist` when it exists; step 21 adds the Docker image, compose, the embedding model
-in the image/volume and the README run instructions). All manual tests on
-`openai/gpt-oss-20b` (quota plan). Pending on the 120b tomorrow, in order: step 22 examples,
-the video, then the 4 quota-cut eval cases / a full eval run if quota is left.
+**Waiting for the owner's review of step 21** (Docker) and of the local 20b regression
+(the protocol-guard hyphen bug is a real regression to fix). Not pushed: 2b9de21 (regression
+record) and the step 21 commit. Then step 22 on the **120b** (tomorrow, quota plan): the
+recorded example conversations, then the video, then the 4 quota-cut eval cases / a full eval
+run if quota is left; step 23 README.
 
 ## Plan status
 
@@ -44,7 +43,7 @@ the video, then the 4 quota-cut eval cases / a full eval run if quota is left.
 | 18 | Frontend scaffold | done | `feat(frontend): Vite React scaffold` (d8dbbdc) |
 | 19 | Chat UI with streaming | done (mock API; real API in step 17) | `feat(frontend): customer service chat with streaming` (4ae5145) |
 | 20 | Bastidores panel + simulated date banner | done (mock API) | `feat(frontend): demo-mode behind-the-scenes panel and simulated date banner` (1979f10); `fix(agent): refusals in Tom's voice` (3515048); `fix(agent): refusal examples, phrase guard, optional order data, injection rule` (30f7830); `test: eval reports tool args and guard interventions as a metric` (eb89dce); `test: injected-instruction criterion and pending eval re-runs` (d67afd5) |
-| 21 | Serve frontend from API, Docker | pending | |
+| 21 | Serve frontend from API, Docker | done | `build: serve frontend from API, Dockerfile and compose` |
 | 22 | Recorded example conversations | pending | |
 | 23 | README | pending | |
 
@@ -1038,6 +1037,37 @@ the video, then the 4 quota-cut eval cases / a full eval run if quota is left.
   intervention, 2 calls, ≈ 5,100 input tokens, ≈ 1 s. (A first retest round still failed: a
   script error had left the old check in place; it was re-applied and verified.) Minor: one
   answer added "6 cordas de aço" (specs only say steel strings).
+- **Step 21 — Docker** (`Dockerfile`, `.dockerignore`, `docker-compose.yml`). Multi-stage:
+  `node:22-slim` builds `frontend/dist` (`npm ci && npm run build`); `python:3.12-slim` + uv
+  0.13.6 (copied from `ghcr.io/astral-sh/uv:0.13.6`), `uv sync --frozen --no-dev`, then
+  **`scripts/build_index.py` at build time**: the embedding model (~1.1 GB) and the policy
+  index are **baked into the image** (decision deferred since step 6): a container is ready
+  in ≈ 3 s with no download — matters for Hugging Face Spaces cold starts; the cost is image
+  size. The API serves `frontend/dist` at `/` (step 17). Runs as **uid 1000** (`app`, what
+  HF Spaces expects); the user is created **before** copying so files are owned by it from
+  the start — a final `chown -R` had duplicated the model into a second 1.13 GB layer (first
+  build 5.43 GB); the uv cache is a BuildKit cache mount, not a layer. Result: layers ≈
+  1.7 GB (model 1.13 GB, venv 382 MB, base ≈ 150 MB; `docker images` on Docker Desktop shows
+  2.9 GB because it also counts the compressed blobs). `HEALTHCHECK` on `/api/health`;
+  `CMD uvicorn … --host 0.0.0.0 --port ${PORT} --no-proxy-headers` (`PORT` default 8000; HF
+  Spaces will use 7860).
+- **Step 21 — compose:** one service, `env_file: .env` (optional), and `environment:` pins
+  `DATABASE_URL` / `CHECKPOINT_DB` to `/app/data/runtime/db/…` — `environment:` wins over
+  `env_file`, so a local `.env` with the relative dev paths can't move the DBs out of the
+  volume. Named volumes: `emporio-db` (`store.db`, `checkpoints.db`, WAL files) and
+  `emporio-traces`; the baked model/index stay in the image (volumes mount only those two
+  subdirectories, so they don't hide it). **Gotcha (README):** with plain `docker run
+  --env-file .env`, the `.env`'s relative `DATABASE_URL` **overrides** the image's ENV and
+  the DBs land in the container layer (seen in testing) — use compose, or pass `-e
+  DATABASE_URL=… -e CHECKPOINT_DB=…`.
+- **Step 21 — verified (2026-11-02, Docker Desktop 28.3.3, gpt-oss-20b via a temporary
+  compose override, quota plan):** build ok (model load 26 s, 26 chunks); ready in 3 s;
+  health/config/`/` ok; chat SSE ("Qual o prazo para trocar um produto com defeito?" →
+  search_policies → "até 30 dias corridos após a compra…"; GD20 PIX → "R$ 2.089,05 no PIX");
+  DB + checkpoints in the volume with WAL; data survives `compose down`/`up`; DELETE removes
+  checkpoints and trace; healthcheck `healthy`. Note: behind Docker Desktop's port
+  forwarding, uvicorn sees a forwarding address as the peer, so all local clients share one
+  per-IP key; in a real deployment set `TRUSTED_PROXY_HOPS` for the platform's proxy.
 - **Convention** — The "Commit" column holds the commit subject; hashes are in `git log`
   (a commit cannot contain its own hash).
 
@@ -1502,3 +1532,11 @@ the video, then the 4 quota-cut eval cases / a full eval run if quota is left.
 - Done: full eval suite on Ollama gpt-oss:20b after the day's changes: 23/28 (classification
   under Known issues). Not fixed yet — waiting for the owner (the protocol hyphen bug is a
   real regression).
+
+### 2026-11-02 17:50 — Step 21: Serve frontend from API, Dockerfile and compose
+- Done: pushed the PIX fix (3ff1049); local 20b regression recorded (2b9de21). Multi-stage
+  Dockerfile (frontend build, uv app, baked model + index, uid 1000, healthcheck), compose with
+  DB/trace volumes, `.dockerignore`. Started Docker Desktop to build and test.
+- Files: `Dockerfile`, `.dockerignore`, `docker-compose.yml`, `PROGRESS.md`.
+- Checks: `docker compose config` ok; image built; container tests listed in Decisions.
+  Not pushed (owner review).
