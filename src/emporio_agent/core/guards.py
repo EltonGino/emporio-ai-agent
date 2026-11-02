@@ -12,6 +12,8 @@ emitted (see PROGRESS.md: streaming).
 - TopicToolCheck: an answer about a topic, with figures or rules, needs one of that topic's
   tools in this turn (a model said "no PIX o valor permanece o mesmo" without the payment tool).
 - PhraseCheck: forbidden phrase patterns (e.g. robotic refusals that break the persona).
+- FieldLabelCheck: a value a tool returned must not get a wrong label (an order date called
+  "Enviado em" / "entregue em": the data has no shipping or delivery date).
 
 Corrections must point to the right action (which tool to call), not only forbid: a check
 that only forbids can push the model to an evasive or wrong answer. A check with
@@ -196,15 +198,15 @@ def _normalized(text: str) -> str:
     return unidecode(normalize_typography(text)).casefold()
 
 
-def field_amounts(messages: Iterable[AnyMessage], fields: Sequence[str]) -> set[Decimal]:
-    """Values of the given JSON keys (at any depth) in these tool results, as amounts."""
-    found: set[Decimal] = set()
+def field_values(messages: Iterable[AnyMessage], fields: Sequence[str]) -> list[Any]:
+    """Values of the given JSON keys (at any depth) in these tool results."""
+    found: list[Any] = []
 
     def walk(node: Any) -> None:
         if isinstance(node, dict):
             for key, value in node.items():
-                if key in fields and (amount := parse_amount(str(value))) is not None:
-                    found.add(amount)
+                if key in fields:
+                    found.append(value)
                 walk(value)
         elif isinstance(node, list):
             for item in node:
@@ -217,6 +219,12 @@ def field_amounts(messages: Iterable[AnyMessage], fields: Sequence[str]) -> set[
             except ValueError:
                 continue
     return found
+
+
+def field_amounts(messages: Iterable[AnyMessage], fields: Sequence[str]) -> set[Decimal]:
+    """Values of the given JSON keys (at any depth) in these tool results, as amounts."""
+    amounts = (parse_amount(str(v)) for v in field_values(messages, fields))
+    return {a for a in amounts if a is not None}
 
 
 @dataclass
@@ -276,6 +284,55 @@ class PhraseCheck:
     def problems(self, answer: str, history: Sequence[AnyMessage]) -> set[str]:
         text = _normalized(answer)
         return {m.group(0) for pattern in self.patterns for m in re.finditer(pattern, text)}
+
+    def correction(self, problems: set[str]) -> str:
+        return self.correction_note(problems)
+
+
+# --- labels of tool values ------------------------------------------------------------------
+
+BR_DATE = re.compile(r"(\d{2}/\d{2})/(\d{4})")
+
+
+def _value_pattern(value: str) -> str:
+    """A dd/mm/yyyy date also matches its short dd/mm form ("Enviado em 15/02")."""
+    if match := BR_DATE.fullmatch(value):
+        return rf"(?<![\d/]){re.escape(match[1])}(?:/{match[2]})?(?![\d/])"
+    return re.escape(_normalized(value))
+
+
+def _last(patterns: Sequence[str], text: str) -> int:
+    return max((m.end() for p in patterns for m in re.finditer(p, text)), default=-1)
+
+
+@dataclass
+class FieldLabelCheck:
+    """Values of `fields` returned by `tool_name` in this conversation must not be presented
+    with a wrong label: on the answer's line, the closest label within `window` characters
+    before the value must not be one of `wrong_labels` (regexes over accent/case-normalized
+    text) unless one of `right_labels` is closer."""
+
+    tool_name: str
+    fields: Sequence[str]
+    wrong_labels: Sequence[str]
+    right_labels: Sequence[str]
+    correction_note: Callable[[set[str]], str]
+    safe_answer: SafeAnswer
+    name: str = "field_label"
+    window: int = 30
+
+    def problems(self, answer: str, history: Sequence[AnyMessage]) -> set[str]:
+        results = [m for m in history if isinstance(m, ToolMessage) and m.name == self.tool_name]
+        values = {str(v) for v in field_values(results, self.fields) if v}
+        found = set()
+        for line in answer.splitlines():
+            text = _normalized(line)
+            for value in values:
+                for match in re.finditer(_value_pattern(value), text):
+                    before = text[max(0, match.start() - self.window) : match.start()]
+                    if _last(self.wrong_labels, before) > _last(self.right_labels, before):
+                        found.add(value)
+        return found
 
     def correction(self, problems: set[str]) -> str:
         return self.correction_note(problems)

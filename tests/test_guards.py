@@ -251,3 +251,64 @@ def test_payment_answers_need_a_payment_tool_or_the_tools_pix_value(answer, resu
 def test_price_correction_points_to_the_right_tool():
     note = price_correction_note({"R$ 2.089,05"})
     assert "calculate_payment_options" in note and "get_product_details" in note
+
+
+# --- order date labels (owner decision: deterministic check) --------------------------------
+
+from emporio_agent.client.assistant import output_guard  # noqa: E402
+
+ORDER_8 = (
+    '{"order_id":8,"customer_first_name":"Ana","status":"shipped","status_text":"enviado",'
+    '"order_date":"15/02/2026","order_date_text":"pedido feito em 15/02/2026",'
+    '"tracking_code":"BRJL5544332BR","estimated_delivery":"28/02/2026","delayed":true}'
+)
+
+
+WITH_ORDER = [
+    HumanMessage("Pedido 8, anacarol.ferreira@coldmail.com"),
+    ToolMessage(ORDER_8, tool_call_id="c", name="get_order_status"),
+]
+
+
+def order_date_check():
+    return next(c for c in output_guard().checks if c.name == "order_date_label")
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [  # seen live on gpt-oss:20b, plus English/Spanish forms
+        "📅 Enviado em 15/02/2026",
+        "📅 **Enviado em:** 15/02/2026",
+        "- **Data de envio**: 15/02/2026",
+        "Oi Ana! Seu pedido 8 foi enviado em 15/02/2026.",
+        "Seu pedido já foi entregue em 15/02/2026.",
+        "Seu pedido foi cancelado em 15/02/2026.",
+        "Enviado em 15/02, com previsão para 28/02.",  # short date form
+        "Your order was shipped on 15/02/2026.",
+        "Tu pedido fue enviado el 15/02/2026.",
+    ],
+)
+def test_order_date_presented_as_another_date_is_caught(answer):
+    assert order_date_check().problems(answer, WITH_ORDER) == {"15/02/2026"}
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [  # seen live, correct
+        "- **Data do pedido**: 15/02/2026",
+        "📦 **Status:** enviado (pedido feito em 15/02/2026)",
+        "**Pedido feito em 15/02/2026** – 38 dias atrás.",
+        "Seu pedido foi enviado. Ele foi feito em 15/02/2026.",
+        "Status: enviado\nData do pedido: 15/02/2026",  # the label is on its own line
+        "Enviado! Entrega prevista: 28/02/2026.",  # the forecast is not order_date
+        "Your order was placed on 15/02/2026 and has shipped.",
+        "Tu pedido se hizo el 15/02/2026.",
+        "Enviado em 16/02/2026.",  # not the order's date: nothing to check
+    ],
+)
+def test_right_order_date_labels_pass(answer):
+    assert order_date_check().problems(answer, WITH_ORDER) == set()
+
+
+def test_dates_need_an_order_result():
+    assert order_date_check().problems("Enviado em 15/02/2026", [HumanMessage("oi")]) == set()

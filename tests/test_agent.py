@@ -522,6 +522,55 @@ def test_spanish_refusal_and_english_protocol_safe_answers():
     )
 
 
+ORDER_8 = (
+    '{"order_id":8,"customer_first_name":"Ana","status":"shipped","status_text":"enviado",'
+    '"order_date":"15/02/2026","order_date_text":"pedido feito em 15/02/2026",'
+    '"tracking_code":"BRJL5544332BR","estimated_delivery":"28/02/2026","delayed":true}'
+)
+
+
+@tool
+def get_order_status(order_id: int, email: str) -> str:
+    """Fake order lookup (order 8)."""
+    return ORDER_8
+
+
+def test_order_date_called_shipping_date_is_corrected():
+    wrong = AIMessage("Oi Ana! Seu pedido 8 foi enviado em 15/02/2026.")
+    right = AIMessage("Oi Ana! Seu pedido 8 (feito em 15/02/2026) já foi enviado.")
+    model = ScriptedModel(
+        script=[call("get_order_status", {"order_id": 8, "email": "a"}), wrong, right]
+    )
+    result = run_turn(guarded_agent(model, tools=[get_order_status]), "s1", "Pedido 8, a@b.c")
+    assert result.text == right.content
+    assert "Correção obrigatória (data do pedido)" in model.seen[-1][0].content
+
+
+@pytest.mark.parametrize(
+    "message, expected",
+    [
+        (
+            "Pedido 8, a@b.c",
+            "Desculpe, me confundi com as datas. Seu pedido 8 foi feito em 15/02/2026; "
+            "status: enviado. Previsão de entrega: 28/02/2026. Código de rastreio: BRJL5544332BR. "
+            "A entrega está atrasada: quer que eu registre o caso com a equipe?",
+        ),
+        (
+            "What about my order 8? My email is a@b.c",
+            "Sorry, I mixed up the dates. Your order 8 was placed on 15/02/2026; status: "
+            "shipped. Estimated delivery: 28/02/2026. Tracking code: BRJL5544332BR. The "
+            "delivery is late: would you like me to register the case with the team?",
+        ),
+    ],
+)
+def test_order_date_safe_answer_states_the_facts(message, expected):
+    wrong = AIMessage("Enviado em 15/02/2026.")
+    model = ScriptedModel(
+        script=[call("get_order_status", {"order_id": 8, "email": "a"}), wrong, wrong]
+    )
+    assert run_turn(guarded_agent(model, tools=[get_order_status]), "s1", message).text == expected
+
+
 # --- history trimming ------------------------------------------------------------------------
 
 

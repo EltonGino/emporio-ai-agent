@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import uuid
 from collections.abc import Callable, Sequence
@@ -11,7 +12,7 @@ from string import Template
 
 from langchain.chat_models import init_chat_model
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AnyMessage, HumanMessage
+from langchain_core.messages import AnyMessage, HumanMessage, ToolMessage
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from unidecode import unidecode
 
@@ -25,6 +26,7 @@ from emporio_agent.clock import Clock, get_clock
 from emporio_agent.config import ClientConfig, Settings
 from emporio_agent.core.agent import build_agent, is_invalid_tool_call, is_local_invalid_tool_call
 from emporio_agent.core.guards import (
+    FieldLabelCheck,
     OutputGuard,
     PhraseCheck,
     PriceCheck,
@@ -258,9 +260,129 @@ def output_guard() -> OutputGuard:
                 safe_answer=localized(SAFE_REFUSAL_ANSWERS),
                 name="robotic_phrase",
             ),
+            FieldLabelCheck(
+                tool_name="get_order_status",
+                fields=("order_date",),
+                wrong_labels=WRONG_DATE_LABELS,
+                right_labels=RIGHT_DATE_LABELS,
+                correction_note=order_date_correction_note,
+                safe_answer=safe_order_date_answer,
+                name="order_date_label",
+            ),
         ],
         forced_tool_note=FORCED_TOOL_NOTE,
     )
+
+
+# Order dates: order_date is the purchase date; the data has no shipping, delivery or
+# cancellation date (owner's test: "📅 Enviado em 15/02/2026", "entregue em 15/10/2025").
+WRONG_DATE_LABELS = (
+    r"envi",  # envio, enviado (pt/es)
+    r"entreg",  # entregue, entrega (pt), entregado (es)
+    r"despach",
+    r"expedi",
+    r"postad",
+    r"cancel",
+    r"chegou",
+    r"\bship",
+    r"\bdeliver",
+    r"\bdispatch",
+    r"\bsent\b",
+    r"\barriv",
+)
+RIGHT_DATE_LABELS = (
+    r"feito",
+    r"\bdo pedido",
+    r"\bpedido (?:de|em|no dia)\b",
+    r"\bcompra",
+    r"realizad",
+    r"\bplaced",
+    r"\bordered",
+    r"\border date",
+    r"\bpurchase",
+    r"\bmade\b",
+    r"\bhecho",
+    r"\bdel pedido",
+)
+ORDER_STATUS = {
+    "en": {
+        "pending": "awaiting payment confirmation",
+        "confirmed": "confirmed, being prepared",
+        "shipped": "shipped",
+        "delivered": "delivered",
+        "cancelled": "cancelled",
+    },
+    "es": {
+        "pending": "esperando la confirmación del pago",
+        "confirmed": "confirmado, en preparación",
+        "shipped": "enviado",
+        "delivered": "entregado",
+        "cancelled": "cancelado",
+    },
+}
+# (opening, estimated delivery, tracking code, delayed → offer, closing, no order found)
+ORDER_DATE_ANSWER = {
+    "pt": (
+        "Desculpe, me confundi com as datas. Seu pedido {id} foi feito em {date}; "
+        "status: {status}.",
+        " Previsão de entrega: {eta}.",
+        " Código de rastreio: {code}.",
+        " A entrega está atrasada: quer que eu registre o caso com a equipe?",
+        " Posso ajudar em algo mais?",
+        "Desculpe, me confundi com as datas. Quer que eu consulte o pedido de novo?",
+    ),
+    "en": (
+        "Sorry, I mixed up the dates. Your order {id} was placed on {date}; status: {status}.",
+        " Estimated delivery: {eta}.",
+        " Tracking code: {code}.",
+        " The delivery is late: would you like me to register the case with the team?",
+        " Can I help with anything else?",
+        "Sorry, I mixed up the dates. Would you like me to check the order again?",
+    ),
+    "es": (
+        "Disculpa, me confundí con las fechas. Tu pedido {id} se hizo el {date}; estado: {status}.",
+        " Entrega prevista: {eta}.",
+        " Código de rastreo: {code}.",
+        " La entrega está atrasada: ¿quieres que registre el caso con el equipo?",
+        " ¿Te ayudo con algo más?",
+        "Disculpa, me confundí con las fechas. ¿Quieres que consulte el pedido de nuevo?",
+    ),
+}
+
+
+def order_date_correction_note(dates: set[str]) -> str:
+    return (
+        "## Correção obrigatória (data do pedido)\n"
+        f"Sua resposta anterior apresentou {', '.join(sorted(dates))} como data de envio, "
+        "entrega ou cancelamento. Essa é a data em que o pedido foi feito (order_date_text); os "
+        "dados não têm data de envio, de entrega nem de cancelamento (estimated_delivery é só "
+        "uma previsão). Responda de novo chamando-a de data do pedido."
+    )
+
+
+def safe_order_date_answer(history: Sequence[AnyMessage]) -> str:
+    """The last verified order's facts, worded by code, in the customer's language."""
+    language = customer_language(history)
+    opening, eta_text, code_text, late_text, closing, fallback = ORDER_DATE_ANSWER[language]
+    order = None
+    for message in reversed(history):
+        if isinstance(message, ToolMessage) and message.name == "get_order_status":
+            try:
+                data = json.loads(message.text)
+            except ValueError:
+                continue
+            if isinstance(data, dict) and "order_id" in data:
+                order = data
+                break
+    if order is None:
+        return fallback
+    status = ORDER_STATUS.get(language, {}).get(order["status"], order["status_text"])
+    answer = opening.format(id=order["order_id"], date=order["order_date"], status=status)
+    if order.get("estimated_delivery") and order["status"] in ("confirmed", "shipped"):
+        answer += eta_text.format(eta=order["estimated_delivery"])
+    if order.get("tracking_code"):
+        answer += code_text.format(code=order["tracking_code"])
+    return answer + (late_text if order.get("delayed") else closing)
 
 
 def make_chat_model(name: str, settings: Settings, last: bool) -> BaseChatModel:
