@@ -16,6 +16,7 @@ from emporio_agent.client.repository import (
 )
 from emporio_agent.client.rules import apply_discount, availability, format_brl
 from emporio_agent.client.tools import build_tools
+from emporio_agent.clock import get_clock
 from emporio_agent.config import get_client_config
 
 
@@ -33,7 +34,7 @@ def repo(engine):
 
 @pytest.fixture(scope="module")
 def tools(repo):
-    return {t.name: t for t in build_tools(repo, get_client_config())}
+    return {t.name: t for t in build_tools(repo, get_client_config(), get_clock())}
 
 
 def call(tool, args=None):

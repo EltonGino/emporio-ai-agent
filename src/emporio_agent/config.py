@@ -20,6 +20,7 @@ INDEX_DIR = PROJECT_ROOT / "data" / "runtime" / "index"  # chunks + vectors, reb
 MODEL_CACHE_DIR = PROJECT_ROOT / "data" / "runtime" / "models"  # embedding model download
 
 Weekday = Literal["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+ReturnReason = Literal["arrependimento", "defeito", "preferencia"]
 WEEKDAYS: tuple[Weekday, ...] = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 
 
@@ -187,6 +188,7 @@ class ReturnsConfig(_Strict):
     defect_days_after_purchase: int
     legal_warranty_days_after_receipt: int
     ineligible_conditions: list[str]
+    item_conditions: dict[ReturnReason, list[str]]
 
 
 class SupportConfig(_Strict):

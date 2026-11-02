@@ -14,6 +14,7 @@ from emporio_agent.client.rules import (
     pix_price,
 )
 from emporio_agent.client.tools import build_tools
+from emporio_agent.clock import get_clock
 from emporio_agent.config import get_client_config
 
 PAYMENTS = get_client_config().payments
@@ -24,7 +25,9 @@ BANDS = PAYMENTS.installment_bands
 def tools(tmp_path_factory):
     engine = make_engine(f"sqlite:///{tmp_path_factory.mktemp('db')}/store.db")
     load_store_data(engine)
-    return {t.name: t for t in build_tools(SqlStoreRepository(engine), get_client_config())}
+    return {
+        t.name: t for t in build_tools(SqlStoreRepository(engine), get_client_config(), get_clock())
+    }
 
 
 def call(tool, args):

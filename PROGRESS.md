@@ -13,11 +13,13 @@ Update this file in the same commit as every plan step (see AGENTS.md §0 and §
 
 ## Next step
 
-Step 10 — `feat(tools): order status and return eligibility with identity check` (+ tests)
-(AGENTS.md §7 `get_order_status`, `check_return_eligibility`; §5.3 D4, D6, D7, D8, E1; §14:
-identity failure is generic, lockout after 5 failures, return windows with a fixed clock).
-Add `get_order_for_customer(order_id, email)` to the repository; the tools need the clock
-(`clock.py`) and per-session failure counting.
+Step 11 — `feat(tools): store status, policy search and human handoff` (+ tests) (AGENTS.md §7
+`get_store_status`, `search_policies`, `handoff_to_human`; §14: store status on Sunday,
+Saturday 13:01 and holiday 2026-11-02 (Finados); handoff protocol `EMP-YYYYMMDD-NNNN`).
+`search_policies` description must ask for a self-contained, policy-oriented query (see
+"search_policies query rewriting"). Contacts come from `client.yaml` (P1/P2). `handoffs`
+runtime table (no FK to store tables). Holidays need a BR/MS holiday source — [VERIFY] the
+`holidays` package or a small inline list.
 
 ## Plan status
 
@@ -31,8 +33,8 @@ Add `get_order_for_customer(order_id, email)` to the repository; the tools need 
 | 6 | BM25, dense and hybrid retrievers | done | `feat(retrieval): BM25, dense and hybrid retrievers` (31ab685) |
 | 7 | Retrieval golden set + eval script | done | `feat(evals): retrieval golden set and evaluation script` (fdb9a8e) |
 | 8 | Catalog and promotion tools | done | `feat(tools): catalog and promotion tools` (26bf364); signals in `feat(tools): partial-match and accessory signals in product search` |
-| 9 | Payment rules | done | `feat(tools): payment rules` |
-| 10 | Order status + return eligibility | pending | |
+| 9 | Payment rules | done | `feat(tools): payment rules` (ebaa394) |
+| 10 | Order status + return eligibility | done | `feat(tools): order status and return eligibility with identity check` |
 | 11 | Store status, policy search, handoff | pending | |
 | 12 | Persona prompt + agent with memory | pending | |
 | 13 | Event stream + JSONL tracing | pending | |
@@ -150,6 +152,18 @@ Add `get_order_for_customer(order_id, email)` to the repository; the tools need 
   missing from dense's top 10, so RRF drops it to rank 7 (chunks in both lists score 2/(60+r),
   beating 1/61). Hybrid kept as default: the agent won't always rewrite perfectly, and hybrid
   has the best worst case.
+- **Session id inside tools [VERIFY] (step 10, 2026-11-02)** — checked in a throwaway env with
+  langchain 1.2.13 / langchain-core 1.7.3 / langgraph 1.1.3 (+ langgraph-prebuilt 1.0.8) and a
+  fake chat model inside `create_agent`. Two supported ways: a `config: RunnableConfig`
+  parameter (langchain-core) or `runtime: ToolRuntime` (`from langchain.tools import
+  ToolRuntime`, `runtime.config`). Both are **hidden from the model's tool schema** and
+  injected by the agent's ToolNode with the caller's config, so
+  `config["configurable"]["thread_id"]` is the session id passed to `agent.invoke(...,
+  {"configurable": {"thread_id": session_id}})`. A model-supplied `config` argument is
+  ignored. **Chosen: `config: RunnableConfig`** — needs only langchain-core and can be tested
+  with `tool.invoke(args, config=...)`. Note: an unpinned langgraph-prebuilt (newer than 1.0.8)
+  failed to import with langgraph 1.1.3 (`ServerInfo`), so step 12 must let uv lock compatible
+  versions (no hand pins).
 - Manual §2 hours confirmed from the PDF: Mon–Fri 09:00–18:00, Sat 09:00–13:00, Sun and
   holidays closed.
 
@@ -410,6 +424,37 @@ Add `get_order_for_customer(order_id, email)` to the repository; the tools need 
   string ("3x de R$ 733,00", ≈ 100 tokens for 12x) so the LLM never divides money.
   `get_product_details` gained the deferred `payment` summary (PIX price, max installments
   and value) for sellable products.
+- **Step 10** — Identity check: `repo.get_order_for_customer(order_id, email)` returns `None`
+  both for an unknown order and for an email that isn't **that order's customer's** (emails
+  normalized; D8 shared email only opens customer 11's orders). The tools return one constant
+  string, `identity.ORDER_NOT_FOUND`, for both — **byte-identical** (owner requirement, tested
+  with unknown order, another real customer's email and a malformed email). Output never has
+  other customer fields: only `customer_first_name` (manual §7.2 greeting).
+- **Step 10** — Lockout (owner requirement): the session id is read from the tool's run config
+  (`configurable.thread_id`), **never from a tool argument**; a test sends a fake `thread_id`
+  argument and shows it is ignored. 5 failures per session (shared by `get_order_status` and
+  `check_return_eligibility`) → every later lookup in that session returns
+  `TOO_MANY_ATTEMPTS`, even with correct data; a success does not reset the counter. No
+  session in the config → `session_required` (fail closed). The counter is in memory
+  (`identity.FailedLookups`, thread-safe), shared by one tool set per process.
+- **Step 10** — Order status: Portuguese status text (AGENTS.md §7), dates as `dd/mm/yyyy`,
+  human-readable payment method ("cartão de crédito em 12x"), `total` = amount paid (D4),
+  `delayed` = status confirmed/shipped and ETA before today (D7). Old pending/confirmed orders
+  without an ETA are **not** flagged: the manual has no dispatch deadline to compare with; if
+  the customer complains, the agent hands off (prompt, step 12).
+- **Step 10** — Return windows (`rules.return_eligibility`, pure): only delivered orders;
+  receipt date = ETA (D6), capped at today; regret and preference = 7 days after receipt;
+  defect = 30 days after purchase, then `defect_after_exchange_window` (manufacturer warranty,
+  store can mediate) with `legal_warranty_until` = receipt + 90 days (§8.1). Windows are
+  inclusive (order 7: eligible on 24/02, not on 25/02). `next_steps` are short fixed English
+  hints for the LLM (e.g. eligible → confirm conditions and `handoff_to_human`, since the
+  agent cannot process a return itself).
+- **Step 10** — `client.yaml` gained `returns.item_conditions` per reason (product state
+  conditions from manual §4.1–4.3), returned as `conditions_to_confirm` with the
+  `ineligible_conditions` list as `not_eligible_items`: the tool answers the return question in
+  one call, without a policy search. Reasons are a `ReturnReason` literal in `config.py`.
+- **Step 10** — `build_tools(repo, client, clock, failed_lookups=None)`: tools take the injectable
+  clock (dates depend on "today").
 - **Convention** — The "Commit" column holds the commit subject; hashes are in `git log`
   (a commit cannot contain its own hash).
 
@@ -429,6 +474,15 @@ Add `get_order_for_customer(order_id, email)` to the repository; the tools need 
 - Chunks are verbatim: chunk 1.2 contains the accented email (P2) and chunk 7 the other
   WhatsApp number (P1). Steps 11/12: contacts must come from `client.yaml` (store status tool /
   prompt), and the prompt must say config contacts win over retrieved text.
+
+- **README known limitation (owner, step 9):** installments are `total / n` rounded to cents,
+  so n × installment can differ from the total by a few cents (e.g. 7 × R$ 314,14 =
+  R$ 2.198,98 for R$ 2.199,00); a real checkout adjusts one installment. List it in README
+  "Known limitations" (step 23).
+- **README security note (step 10):** the lockout counter is per session and in memory: it
+  resets on restart and a new session starts a new counter. It limits guessing inside one
+  conversation; real protection needs authenticated customers or a per-IP/global limit
+  (step 17's per-session and daily caps help). List it in README.
 
 ## Log
 
@@ -557,3 +611,15 @@ Add `get_order_for_customer(order_id, email)` to the repository; the tools need 
   150, 240, 319.99/320, 480, 699.99/700, 1199.99/1200; combined payment at 2000/2000.01).
 - Notes: Takamine GD20 → R$ 2.199,00, PIX R$ 2.089,05, 12x R$ 183,25 (matches the AGENTS.md §9
   tone example).
+
+### 2026-11-02 00:50 — Step 10: Order status + return eligibility with identity check
+- Done: pushed step 9 (owner approval). [VERIFY] tool run config / session id (Verified
+  facts). Repository `get_order_for_customer`; `rules.return_eligibility`;
+  `client/identity.py` (generic errors, per-session lockout); tools `get_order_status`,
+  `check_return_eligibility`; `returns.item_conditions` in client.yaml.
+- Files: `config/client.yaml`, `src/emporio_agent/config.py`,
+  `src/emporio_agent/client/{identity,repository,rules,tools}.py`, `tests/test_orders.py`,
+  `tests/test_catalog.py`, `tests/test_payments.py`, `PROGRESS.md`.
+- Tests: ruff ok, format ok, `pytest -m "not llm"` 177 passed.
+- Notes: AGENTS.md §15 scenarios check out: order 8 at 2026-03-25 → `delayed: true`; order 7
+  at 2026-02-20, arrependimento → eligible until 24/02/2026 (3 days elapsed).

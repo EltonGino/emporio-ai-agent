@@ -50,6 +50,10 @@ returns:                                   # manual §4
     - "setup/regulagem sob encomenda"
     - '"venda final" em liquidação'
     - "boquilhas de sopro"
+  item_conditions:                         # §4.1–4.3, checked with the customer (not in data)
+    arrependimento: ["embalagem original, sem sinais de uso, com todos os acessórios e manuais"]
+    preferencia: ["produto em perfeito estado e na embalagem original", "sujeita à disponibilidade do produto desejado"]
+    defeito: ["defeito de fabricação; mau uso, quedas, umidade excessiva ou modificações não são cobertos"]
 
 support:
   complaint_return_business_hours: 24

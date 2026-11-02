@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from datetime import date
 from decimal import Decimal
 from typing import Any, Protocol
 
@@ -16,7 +17,8 @@ from sqlalchemy import Engine, select
 from sqlalchemy.orm import Session, selectinload
 
 from emporio_agent.client import matching
-from emporio_agent.client.db.models import Category, Product, Promotion
+from emporio_agent.client.db.loader import normalize_email
+from emporio_agent.client.db.models import Category, Order, OrderItem, Product, Promotion
 from emporio_agent.client.rules import apply_discount, availability
 
 # Extra search words derived from specs, so "violão de aço" or "eletroacústico" match.
@@ -80,6 +82,29 @@ class ProductSearch:
         return bool(self.unmatched_terms)
 
 
+@dataclass(frozen=True)
+class OrderItemInfo:
+    product_id: int
+    name: str
+    quantity: int
+
+
+@dataclass(frozen=True)
+class OrderInfo:
+    """What an identified customer may see about their own order (no other customer data)."""
+
+    order_id: int
+    customer_first_name: str
+    order_date: date
+    status: str
+    total: Decimal  # amount paid; may differ from the sum of items (D4)
+    payment_method: str
+    tracking_code: str | None
+    estimated_delivery: date | None  # also the proxy for the receipt date (D6)
+    notes: str | None
+    items: list[OrderItemInfo]
+
+
 class UnknownCategoryError(ValueError):
     def __init__(self, name: str, known: list[str]) -> None:
         super().__init__(f"unknown category {name!r}")
@@ -94,6 +119,10 @@ class StoreRepository(Protocol):
     def active_promotion(self, product_id: int) -> PromotionInfo | None: ...
 
     def list_active_promotions(self) -> list[ProductInfo]: ...
+
+    def get_order_for_customer(self, order_id: int, email: str) -> OrderInfo | None:
+        """None when the order doesn't exist or the email isn't its customer's (same answer)."""
+        ...
 
 
 def best_promotion(promotions: Sequence[Promotion]) -> PromotionInfo | None:
@@ -227,3 +256,32 @@ class SqlStoreRepository:
             active = select(Promotion.product_id).where(Promotion.is_active)
             products = self._products(session, Product.product_id.in_(active))
         return sorted(products, key=lambda p: (p.final_price / p.price, p.id))  # biggest first
+
+    def get_order_for_customer(self, order_id: int, email: str) -> OrderInfo | None:
+        with Session(self._engine) as session:
+            order = session.scalars(
+                select(Order)
+                .options(
+                    selectinload(Order.customer),
+                    selectinload(Order.items).selectinload(OrderItem.product),
+                )
+                .where(Order.order_id == order_id)
+            ).one_or_none()
+            # The email must be the one of this order's own customer (D8: emails aren't unique).
+            if order is None or order.customer.email != normalize_email(email):
+                return None
+            return OrderInfo(
+                order_id=order.order_id,
+                customer_first_name=order.customer.name.split()[0],
+                order_date=order.order_date,
+                status=order.status,
+                total=order.total_brl,
+                payment_method=order.payment_method,
+                tracking_code=order.tracking_code,
+                estimated_delivery=order.estimated_delivery,
+                notes=order.notes,
+                items=[
+                    OrderItemInfo(i.product_id, i.product.name, i.quantity)
+                    for i in sorted(order.items, key=lambda i: i.id)
+                ],
+            )

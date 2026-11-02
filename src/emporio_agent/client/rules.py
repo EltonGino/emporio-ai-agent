@@ -8,9 +8,10 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
-from emporio_agent.config import InstallmentBand, PaymentsConfig
+from emporio_agent.config import InstallmentBand, PaymentsConfig, ReturnReason, ReturnsConfig
 
 CENT = Decimal("0.01")
 
@@ -102,3 +103,51 @@ def payment_options(lines: Sequence[CartLine], payments: PaymentsConfig) -> Paym
         # "acima de R$ 2.000,00" → strictly above
         combined_payment_allowed=total > _dec(payments.combined_payment_min_total),
     )
+
+
+# --- returns (manual §4, §8.1) -----------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ReturnDecision:
+    eligible: bool
+    rule_applied: str
+    deadline: date | None = None
+    days_elapsed: int | None = None
+    receipt_date: date | None = None
+    legal_warranty_until: date | None = None  # defects only (90 days from receipt)
+
+
+def return_eligibility(
+    reason: ReturnReason,
+    status: str,
+    order_date: date,
+    estimated_delivery: date | None,
+    today: date,
+    returns: ReturnsConfig,
+) -> ReturnDecision:
+    """Deterministic return windows. The receipt date is estimated by the delivery ETA (D6)."""
+    if status == "cancelled":
+        return ReturnDecision(False, "order_cancelled")
+    if status != "delivered":
+        return ReturnDecision(False, "order_not_delivered")
+    if estimated_delivery is None:
+        return ReturnDecision(False, "receipt_date_unknown")
+
+    receipt = min(estimated_delivery, today)  # a delivered order can't arrive in the future
+    if reason == "defeito":
+        deadline = order_date + timedelta(days=returns.defect_days_after_purchase)
+        warranty = receipt + timedelta(days=returns.legal_warranty_days_after_receipt)
+        rule = "defect_exchange_window" if today <= deadline else "defect_after_exchange_window"
+        return ReturnDecision(
+            today <= deadline, rule, deadline, (today - order_date).days, receipt, warranty
+        )
+
+    days = (
+        returns.regret_days_after_receipt
+        if reason == "arrependimento"
+        else returns.preference_days_after_receipt
+    )
+    deadline = receipt + timedelta(days=days)
+    rule = "regret_window" if reason == "arrependimento" else "preference_window"
+    return ReturnDecision(today <= deadline, rule, deadline, (today - receipt).days, receipt)
