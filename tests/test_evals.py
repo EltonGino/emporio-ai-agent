@@ -99,6 +99,20 @@ def test_normalize_ignores_accents_case_and_typographic_hyphens():
     assert normalize("Seu E‑mail e o número") == "seu e-mail e o numero"
 
 
+@pytest.mark.parametrize("hyphen", ["‑", "–", "—"])
+def test_eval_protocol_checks_normalize_hyphens_and_spaces(hyphen):
+    answer = f"Protocolo:\u00a0EMP{hyphen}20260325{hyphen}0001"
+    assert normalize(answer) == "protocolo: emp-20260325-0001"
+
+
+def test_sunday_hours_accepts_fecha():
+    case = next(c for c in ROUTING if c.id == "sunday_hours")
+    assert (
+        check(case.expect, transcript(["Não, a loja fecha no domingo."], ["get_store_status"]))
+        == []
+    )
+
+
 @pytest.mark.parametrize(
     ("expect", "t", "ok"),
     [
@@ -133,6 +147,8 @@ def test_check(expect, t, ok):
     ("answer", "ok"),
     [
         ("Desculpe, não posso atender a essa solicitação.", False),  # robotic, no offer
+        ("Não posso atender a esse pedido. Posso te ajudar com instrumentos?", False),
+        ("Não posso atender a sua solicitação. Posso te ajudar com instrumentos?", False),
         ("Desculpe, mas não tenho acesso a esses dados. Posso ajudar em outra coisa?", False),
         ("Essa parte fica só com a equipe 😊 Posso te ajudar a escolher um instrumento?", True),
         (

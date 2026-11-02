@@ -17,6 +17,9 @@ KEYWORDS = ("protocolo", "protocol")
         ("Seu número de protocolo é 8745123, guarde-o.", {"8745123"}),
         ("o código do caso é 20231102-8745", {"20231102-8745"}),  # dated code, no keyword
         ("Your protocol number is ABC-99812.", {"ABC-99812"}),
+        ("Protocolo: EMP‑20260325‑0001", {"EMP-20260325-0001"}),
+        ("Registrado: EMP–20260325–0001", {"EMP-20260325-0001"}),
+        ("Registrado: EMP\u00a0—\u202f20260325\u00a0—\u202f0001", {"EMP-20260325-0001"}),
     ],
 )
 def test_claimed_protocols(text, claimed):
@@ -43,6 +46,13 @@ def test_issued_protocols_only_from_the_handoff_tool():
         ToolMessage("not json", tool_call_id="3", name="handoff_to_human"),
     ]
     assert issued_protocols(messages, "handoff_to_human") == {"EMP-20260325-0001"}
+
+
+def test_issued_protocols_normalize_typography():
+    message = ToolMessage(
+        '{"protocol":"EMP‑20260325‑0001"}', tool_call_id="1", name="handoff_to_human"
+    )
+    assert issued_protocols([message], "handoff_to_human") == {"EMP-20260325-0001"}
 
 
 # --- money amounts ---------------------------------------------------------------------------
@@ -108,6 +118,13 @@ def test_computed_amounts_are_caught():
     assert CHECK.problems("Você economiza R$ 109,95.", history) == {"R$ 109,95"}
 
 
+@pytest.mark.parametrize("space", ["\u00a0", "\u202f", "\u2009"])
+def test_price_checks_normalize_typographic_spaces(space):
+    history = [HumanMessage("quanto custa?"), SEARCH_RESULT]
+    assert CHECK.problems(f"Sai por R${space}2.199,00.", history) == set()
+    assert CHECK.problems(f"Sai por R${space}2.399,00.", history)
+
+
 def test_customer_amounts_may_be_repeated():
     history = [HumanMessage("violões até R$ 1.000?"), SEARCH_RESULT]
     assert CHECK.problems("Até **R$ 1.000** temos estes:", history) == set()
@@ -125,10 +142,10 @@ def test_previous_turn_tool_results_do_not_count():
 
 # --- robotic phrases -----------------------------------------------------------------------
 
-from emporio_agent.client.assistant import ROBOTIC_PHRASES  # noqa: E402
+from emporio_agent.client.assistant import ROBOTIC_PATTERNS  # noqa: E402
 from emporio_agent.core.guards import PhraseCheck  # noqa: E402
 
-ROBOTIC = PhraseCheck(phrases=ROBOTIC_PHRASES, correction_note=lambda p: "", safe_answer="s")
+ROBOTIC = PhraseCheck(patterns=ROBOTIC_PATTERNS, correction_note=lambda p: "", safe_answer="s")
 
 
 @pytest.mark.parametrize(
@@ -136,8 +153,14 @@ ROBOTIC = PhraseCheck(phrases=ROBOTIC_PHRASES, correction_note=lambda p: "", saf
     [
         # Real answer from the eval run (prompt_reveal, role_override)
         ("Desculpe, não posso atender a essa solicitação. Posso ajudar com...", 1),
+        ("Desculpe, mas não posso atender a esse pedido.", 1),
+        ("Não posso atender a sua solicitação. Posso te ajudar com um violão?", 1),
+        ("NÃO\u00a0POSSO\u202fATENDER\nao seu pedido.", 1),
+        ("Não posso atender pedidos assim. Posso ajudar com instrumentos?", 1),
         ("Desculpe, mas NÃO TENHO ACESSO A ESSES DADOS.", 1),
         ("Essa parte fica só com a nossa equipe 😊 Posso te ajudar com um instrumento?", 0),
+        ("Posso atender sua solicitação de consultar o catálogo.", 0),
+        ("O que posso fazer é te ajudar a escolher um instrumento.", 0),
     ],
 )
 def test_robotic_phrases(answer, found):

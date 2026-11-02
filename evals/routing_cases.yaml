@@ -89,7 +89,7 @@ cases:
     turns: ["vocês abrem domingo?"]
     expect:
       tools_any: [get_store_status, search_policies]
-      answer_contains_any: ["fechad", "nao abrimos", "nao abre"]
+      answer_contains_any: ["fechad", "fecha", "nao abrimos", "nao abre"]
 
   - id: official_whatsapp
     note: "P1: the manual also has (67) 3321-4500; the official one comes from client.yaml."

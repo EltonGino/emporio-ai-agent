@@ -27,6 +27,7 @@ import yaml
 from unidecode import unidecode
 
 from emporio_agent.core.events import stream_turn
+from emporio_agent.core.text import normalize_typography
 
 EXPECTATIONS = {
     "tools_any",  # at least one of these tools was called
@@ -70,7 +71,7 @@ EMOJI = re.compile("[\U0001f300-\U0001faff☀-➿]")
 
 
 def normalize(text: str) -> str:
-    return " ".join(unidecode(text).casefold().split())
+    return unidecode(normalize_typography(text)).casefold()
 
 
 @dataclass(frozen=True)

@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import datetime
 from pathlib import Path
 from string import Template
 
 from langchain.chat_models import init_chat_model
 from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import AnyMessage
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from emporio_agent.client.db.engine import make_engine
@@ -27,6 +28,7 @@ from emporio_agent.core.guards import (
     PriceCheck,
     ProtocolCheck,
     TopicToolCheck,
+    issued_protocols,
 )
 from emporio_agent.core.retrieval.base import Retriever
 
@@ -44,15 +46,26 @@ SAFE_PRICE_ANSWER = (
 
 
 # Robotic refusals seen in evals; they break Tom's persona (manual §7.1).
-ROBOTIC_PHRASES = (
-    "não posso atender a essa solicitação",
-    "não posso atender a sua solicitação",
-    "não tenho acesso a esses dados",
+ROBOTIC_PATTERNS = (
+    r"\bnao posso (?:atender|realizar|fornecer)\b",
+    r"\bnao tenho acesso a esses dados\b",
 )
 SAFE_REFUSAL_ANSWER = (
     "Isso eu não consigo fazer por aqui 😊 Mas posso te ajudar com instrumentos, preços, "
     "formas de pagamento, pedidos ou trocas. O que você precisa?"
 )
+
+
+def safe_protocol_answer(history: Sequence[AnyMessage]) -> str:
+    protocols = sorted(issued_protocols(history, "handoff_to_human"))
+    if not protocols:
+        return SAFE_PROTOCOL_ANSWER
+    registered = (
+        f"Seu chamado já está registrado com o protocolo **{protocols[0]}**."
+        if len(protocols) == 1
+        else f"Os protocolos registrados nesta conversa são: {', '.join(protocols)}."
+    )
+    return f"Desculpe, me confundi ao informar o protocolo. {registered}"
 
 
 def phrase_correction_note(found: set[str]) -> str:
@@ -138,7 +151,7 @@ def output_guard() -> OutputGuard:
                 tool_name="handoff_to_human",
                 keywords=("protocolo", "protocol"),  # also English/Spanish answers
                 correction_note=protocol_correction_note,
-                safe_answer=SAFE_PROTOCOL_ANSWER,
+                safe_answer=safe_protocol_answer,
             ),
             PriceCheck(correction_note=price_correction_note, safe_answer=SAFE_PRICE_ANSWER),
             TopicToolCheck(
@@ -161,7 +174,7 @@ def output_guard() -> OutputGuard:
                 name="pix_value",
             ),
             PhraseCheck(
-                phrases=ROBOTIC_PHRASES,
+                patterns=ROBOTIC_PATTERNS,
                 correction_note=phrase_correction_note,
                 safe_answer=SAFE_REFUSAL_ANSWER,
                 name="robotic_phrase",

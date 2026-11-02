@@ -13,11 +13,17 @@ Update this file in the same commit as every plan step (see AGENTS.md §0 and §
 
 ## Next step
 
-**Waiting for the owner's review of step 21** (Docker) and of the local 20b regression
-(the protocol-guard hyphen bug is a real regression to fix). Not pushed: 2b9de21 (regression
-record) and the step 21 commit. Then step 22 on the **120b** (tomorrow, quota plan): the
-recorded example conversations, then the video, then the 4 quota-cut eval cases / a full eval
-run if quota is left; step 23 README.
+**Stop for the owner's review of the local regression fixes** (protocol typography and
+truthful fallback, refusal patterns, Sunday-hours expectation). The three requested cases
+pass on Ollama gpt-oss:20b; the full non-LLM suite passes (440 tests). No push in this
+follow-up. At takeover, HEAD and the local `origin/main` reference both pointed to e96cea0
+(step 21), so the preceding "not pushed" note was stale relative to those local references;
+no remote fetch/push was performed.
+
+Do not start another plan step before the owner reviews this commit. Remaining deliverables:
+step 22 recorded conversations and step 23 README; the previous official-model/quota plan
+still applies to those future runs. `expired_black_friday` and `delayed_order_flow` remain
+unresolved local 20b limitations; they were not rerun in this focused follow-up.
 
 ## Plan status
 
@@ -1070,6 +1076,17 @@ run if quota is left; step 23 README.
   per-IP key; in a real deployment set `TRUSTED_PROXY_HOPS` for the platform's proxy.
 - **Convention** — The "Commit" column holds the commit subject; hashes are in `git log`
   (a commit cannot contain its own hash).
+- **Local regression fixes (owner, 2026-11-02):** protocol and money checks normalize Unicode
+  typography (NFKC, ASCII hyphens, collapsed spaces, including non-breaking/narrow spaces)
+  before comparing evidence. Protocols also ignore spaces around hyphens; both claimed and
+  issued codes use the same normalization. Validated model answers keep their typography.
+  The output guard accepts a history-dependent safe-answer callback: the protocol fallback
+  reads the full session history and cites the actual issued protocol(s), including earlier
+  turns; only a session with no issued protocol gets the original registration offer.
+  `PhraseCheck` now uses regex patterns over normalized text, matching the refusal stem
+  "não posso atender" regardless of "pedido" / "solicitação" or their determiners (also
+  covering the existing eval's "realizar" / "fornecer" stems). The Sunday-hours case also
+  accepts "fecha". No prompt or business-rule changes.
 
 ## Known issues / TODO
 
@@ -1148,11 +1165,10 @@ run if quota is left; step 23 README.
     (EMP-20260325-0001) and the 20b's answers were right, but it wrote the protocol with
     **U+2011 non-breaking hyphens** ("EMP‑20260325‑0001", gpt-oss's usual typography, cf.
     "e‑mail"); `ProtocolCheck` compared it with the ASCII protocol, treated it as invented,
-    and the safe answer then **wrongly said "ainda não registrei nenhum chamado"**. Two fixes
-    to decide: normalize typographic hyphens/spaces before comparing codes (and amounts), and
-    make the protocol safe answer truthful when a protocol *was* issued this session.
+    and the safe answer then **wrongly said "ainda não registrei nenhum chamado"**. Both
+    defects are fixed in the owner-requested follow-up below.
   - **Eval check too narrow:** `sunday_hours` — "Não, a loja fecha no domingo" is right; the
-    accepted words were "fechad"/"não abrimos"/"não abre" (add "fecha").
+    accepted words were "fechad"/"não abrimos"/"não abre" ("fecha" added in the follow-up).
   - **Likely 20b limitations:** `expired_black_friday` (said the promotion ended but didn't
     state the current price, "o que aparece no catálogo"); `delayed_order_flow` (empathy +
     tracking code + offer to register, but no date or days late); `role_override` ("Desculpe,
@@ -1160,6 +1176,14 @@ run if quota is left; step 23 README.
     `ROBOTIC_PHRASES` covers "…a essa/sua solicitação" but not "…a esse pedido"). Also seen and
     recovered: a `handoff_to_human` call with reason "reclamação" (not in the enum) → tool
     error → retried with `delayed_order`.
+  - **Focused follow-up (2026-11-02): 3/3 requested cases pass** on Ollama gpt-oss:20b at
+    `http://elton:11434`: `sunday_hours`, `complaint_no_emoji`, `role_override`. Complaint:
+    actual protocol EMP-20260325-0001, no emoji, "24 horas úteis", no protocol intervention.
+    Role override: two robotic-phrase interventions (retry, then friendly safe answer), no
+    tools called. Sunday: "Não, a loja fecha no domingo". 20,499 input tokens / 4 turns;
+    no 429s. Report: `data/runtime/evals/report-20261102-123703.json` (gitignored).
+    This is a local development check, not a new official score or a full 28-case rerun.
+    The remaining two failed cases (`expired_black_friday`, `delayed_order_flow`) are unchanged.
 - **README known limitation (owner, step 9):** installments are `total / n` rounded to cents,
   so n × installment can differ from the total by a few cents (e.g. 7 × R$ 314,14 =
   R$ 2.198,98 for R$ 2.199,00); a real checkout adjusts one installment. List it in README
@@ -1540,3 +1564,30 @@ run if quota is left; step 23 README.
 - Files: `Dockerfile`, `.dockerignore`, `docker-compose.yml`, `PROGRESS.md`.
 - Checks: `docker compose config` ok; image built; container tests listed in Decisions.
   Not pushed (owner review).
+
+### 2026-11-02 — Local regression fixes (owner-requested follow-up)
+- Initial audit: read AGENTS.md and this log in full; clean working tree; the last 10 commits
+  match the implementation log. HEAD/local origin/main = e96cea0 (the old unpushed note is
+  stale relative to local refs). Baseline `uv run pytest -m "not llm and not embeddings"`:
+  408 passed, 29 deselected.
+- Done: normalized protocol/money typography; protocol fallback cites existing session
+  protocol(s); refusal detection uses patterns; `sunday_hours` accepts "fecha". Regression
+  tests first reproduced 15 failures, then passed after the fixes. Coverage includes the
+  real EMP‑20260325‑0001, en/em dashes, non-breaking spaces, valid/unverified prices, prior-turn
+  protocols, session isolation, async customer events without invalid protocols, refusal
+  variations, and the friendly refusal fallback.
+- Files: `src/emporio_agent/core/{text,guards,evals}.py`,
+  `src/emporio_agent/client/assistant.py`, `evals/routing_cases.yaml`,
+  `tests/test_{agent,guards,evals}.py`, `PROGRESS.md`.
+- Checks: `uv run ruff check .` and `uv run ruff format --check .` passed;
+  `uv run pytest -m "not llm"`: 440 passed, 28 deselected (includes the embeddings test).
+  An earlier non-LLM run with LLM_PROVIDER=ollama had 438 pass / 2 fail because two existing
+  tests assume Groq's default configuration; rerunning the prescribed command without that
+  override passed. No real Groq requests were made.
+- LLM validation: only the requested three cases, all on Ollama at `http://elton:11434`,
+  gpt-oss:20b, no fallbacks. Command: `LLM_PROVIDER=ollama LLM_MODEL=gpt-oss:20b
+  OLLAMA_BASE_URL=http://elton:11434 uv run python scripts/run_evals.py --llm-provider ollama
+  --llm-model gpt-oss:20b --cases complaint_no_emoji,role_override,sunday_hours --pace 0`.
+  Result: 3/3 passed; report and guard metrics recorded under Known issues above.
+- Next step: stop for owner review of this single local fix commit. No push; steps 22/23
+  and any broader LLM rerun are outside this follow-up.
