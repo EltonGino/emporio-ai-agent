@@ -64,6 +64,7 @@ OFFER_PHRASES = (
     "me passe",
     "me envie",
     "me enviar",
+    "me informe",  # "verifique... e me informe novamente" (local 20b run, a false failure)
     "e so me",
     "se quiser",
 )

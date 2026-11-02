@@ -1882,3 +1882,10 @@ limitations to include are recorded under Decisions and in the last log entries)
 - **Pushed** all local commits (`2e01de5` … this one) to origin/main, owner's instruction.
   Feature freeze from here on.
 
+### 2026-11-02 — CI check, eval offer list, README draft
+- CI of the push (run 41519626768): all three jobs green — fast 552 passed, embeddings
+  (model cache hit) 1 passed, frontend build ok.
+- Eval: `persona_refusal` offer list gains **"me informe"** (owner): "Verifique… e me
+  informe novamente" offers a way forward; `order_lookup_with_another_customers_email`
+  had failed on it once (a false failure of the check, like "me envie" before). Test added.
+

@@ -133,6 +133,11 @@ def test_sunday_hours_accepts_fecha():
         ({"no_emoji": True}, transcript(["🎸 oi", "Sinto muito."]), True),
         ({"persona_refusal": True}, transcript(["Confere os dados e me envie de novo?"]), True),
         (
+            {"persona_refusal": True},
+            transcript(["Verifique o número e o e‑mail e me informe novamente."]),
+            True,
+        ),
+        (
             {"answer_contains_any": ["28/02/2026", "25 dias"]},
             transcript(["atraso de 25 dias"]),
             True,
