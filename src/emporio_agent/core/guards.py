@@ -14,7 +14,11 @@ emitted (see PROGRESS.md: streaming).
 - PhraseCheck: forbidden phrase patterns (e.g. robotic refusals that break the persona).
 
 Corrections must point to the right action (which tool to call), not only forbid: a check
-that only forbids can push the model to an evasive or wrong answer.
+that only forbids can push the model to an evasive or wrong answer. A check with
+`forced_tools` goes further when none of them ran in the turn: the retry must call one of them
+(`tool_choice="any"`, tools narrowed to that set), since a model that answered from memory
+tends to do it again (live: "And about drums?" got invented prices twice, then the safe answer).
+Providers that ignore `tool_choice` (Ollama) still get the narrowed tools and the note.
 """
 
 from __future__ import annotations
@@ -169,6 +173,7 @@ class PriceCheck:
     correction_note: Callable[[set[str]], str]
     safe_answer: str
     name: str = "price"
+    forced_tools: Sequence[str] = ()
 
     def problems(self, answer: str, history: Sequence[AnyMessage]) -> set[str]:
         allowed: set[Decimal] = set()
@@ -230,6 +235,7 @@ class TopicToolCheck:
     evidence_fields: Sequence[str] = ()
     detail_patterns: Sequence[str] = ()  # regexes over the normalized text
     amounts_are_details: bool = True  # False: a price elsewhere in the answer isn't a claim
+    forced_tools: Sequence[str] = ()
 
     def problems(self, answer: str, history: Sequence[AnyMessage]) -> set[str]:
         text = _normalized(answer)
@@ -287,9 +293,10 @@ def _final_answer(response: ModelResponse | AIMessage) -> AIMessage | None:
 
 
 class OutputGuard(AgentMiddleware):
-    def __init__(self, checks: Sequence[Check]) -> None:
+    def __init__(self, checks: Sequence[Check], forced_tool_note: str = "") -> None:
         super().__init__()
         self.checks = list(checks)
+        self.forced_tool_note = forced_tool_note
 
     def failures(self, request: ModelRequest, answer: AIMessage) -> dict[str, set[str]]:
         # The full state, not the trimmed request: old turns lose their tool messages.
@@ -297,10 +304,23 @@ class OutputGuard(AgentMiddleware):
         found = {c.name: c.problems(answer.text, history) for c in self.checks}
         return {name: problems for name, problems in found.items() if problems}
 
+    def forced_tools(self, request: ModelRequest, failures: dict[str, set[str]]) -> list[Any]:
+        """The tools the retry must choose from: those of the failed checks, if none of them
+        ran in this turn (empty = an ordinary retry)."""
+        names = {
+            t for c in self.checks if c.name in failures for t in getattr(c, "forced_tools", ())
+        }
+        history = [*request.state.get("messages", []), *request.messages]
+        called = {m.name for m in current_turn(history) if isinstance(m, ToolMessage)}
+        if not names or called & names:
+            return []
+        return [t for t in request.tools if getattr(t, "name", None) in names]
+
     def _corrected(
         self, request: ModelRequest, failures: dict[str, set[str]], discarded: AIMessage
     ) -> ModelRequest:
         logger.warning("answer failed output checks %s: asking again", failures)
+        forced = self.forced_tools(request, failures)
         notify(  # the discarded answer's tokens were spent too: count them in the turn
             "output_guard",
             action="retry",
@@ -309,10 +329,18 @@ class OutputGuard(AgentMiddleware):
             discarded_text=discarded.text[:DISCARDED_PREVIEW_CHARS],
             discarded_usage=discarded.usage_metadata,
             model=discarded.response_metadata.get("model_name"),
+            forced_tools=[t.name for t in forced],
         )
         notes = [c.correction(failures[c.name]) for c in self.checks if c.name in failures]
         system = request.system_message.text if request.system_message else ""
-        return request.override(system_message=SystemMessage("\n\n".join([system, *notes])))
+        if not forced:
+            return request.override(system_message=SystemMessage("\n\n".join([system, *notes])))
+        notes.append(self.forced_tool_note)
+        return request.override(
+            system_message=SystemMessage("\n\n".join(filter(None, [system, *notes]))),
+            tools=forced,
+            tool_choice="any",  # ChatGroq sends "required"; ChatOllama ignores it
+        )
 
     def _final(self, request: ModelRequest, response: ModelResponse | AIMessage):
         answer = _final_answer(response)

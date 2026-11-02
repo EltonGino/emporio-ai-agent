@@ -13,6 +13,7 @@ class ScriptedModel(BaseChatModel):
 
     script: list[Any]
     seen: list[list[Any]] = []
+    bound: list[tuple[list[str], Any]] = []  # (tool names, tool_choice) per bind_tools call
     name_: str = "scripted"
 
     @property
@@ -20,6 +21,7 @@ class ScriptedModel(BaseChatModel):
         return "scripted"
 
     def bind_tools(self, tools, **kwargs):
+        self.bound.append(([t.name for t in tools], kwargs.get("tool_choice")))
         return self
 
     def _generate(self, messages, stop=None, run_manager=None, **kwargs) -> ChatResult:

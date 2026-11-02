@@ -1708,4 +1708,26 @@ one customer per conversation). One local commit per fix, no push. Steps 22/23 r
   (guitar products don't carry the word; "guitarra elétrica" alone works via partial match).
   Known gap: the guard's safe answers are fixed Portuguese texts, so an English/Spanish
   customer who triggers one gets Portuguese.
+- **2. Forced tool call on the guard's retry.** [VERIFY] (langchain 1.4.7, langchain-groq
+  1.1.3, langchain-ollama 1.1.0): `ModelRequest.override(tools=..., tool_choice=...)` is
+  honoured by `create_agent` (it binds `request.tool_choice`; a subset of the registered tools
+  is allowed). ChatGroq maps `"any"` → `"required"`. **ChatOllama ignores `tool_choice`**
+  (its `bind_tools` docstring: "currently ignored as it is not supported by Ollama"), so on
+  Ollama only the narrowed tool list + note apply. Implementation (core, generic):
+  `PriceCheck`/`TopicToolCheck` gain `forced_tools`; when a failed check has them and none
+  ran in the current turn, `OutputGuard` retries with `tool_choice="any"`, `tools` narrowed
+  to that set and `forced_tool_note` appended; the guard notice lists `forced_tools`. The next
+  model call (after the tool) is free again; a retry that still answers in text gets the safe
+  answer as before. Client: price, payment_tool and pix_value checks use
+  `CATALOG_PAYMENT_TOOLS` (search_products, get_product_details, list_active_promotions,
+  calculate_payment_options) and a Portuguese "Chamada obrigatória" note. Tests: forced on a
+  from-memory answer (owner's drums case), not forced when a catalog tool already ran, never
+  forced by other checks, safe answer when the forced retry still answers in text.
+  Live (Ollama 20b, scratch script that replaces only the **first** model call with the
+  owner's from-memory answer; everything after is the real agent): **4/4 retries called
+  `search_products`** instead of answering in text. GD20 PIX ended right ("R$ 2.089,05 no
+  PIX (preço original R$ 2.199,00)"). The 3 drums runs then said "no drum kits": the
+  model searched `query "drums"` (the catalog-language gap of fix 1), not a guard problem.
+  The first answer of the owner's case can't be reproduced on demand: with fix 1's hint the
+  model now calls `search_products` for "And about drums?" by itself.
 

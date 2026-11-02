@@ -120,6 +120,19 @@ PAYMENT_TOOLS = ("calculate_payment_options", "get_product_details", "search_pol
 # PIX: a product search returns pix_price, so citing that exact amount is accepted too.
 PIX_DETAIL_WORDS = ("desconto", "%")
 PIX_EVIDENCE_FIELDS = ("pix_price", "pix_total")
+# When an amount/PIX/payment answer had none of these in the turn, the retry must call one.
+CATALOG_PAYMENT_TOOLS = (
+    "search_products",
+    "get_product_details",
+    "list_active_promotions",
+    "calculate_payment_options",
+)
+FORCED_TOOL_NOTE = (
+    "## Chamada obrigatória\n"
+    "Nesta tentativa, não responda em texto: chame agora a ferramenta que traz o dado "
+    "(search_products para produtos e preços, com termos em português; "
+    "calculate_payment_options para PIX e parcelas)."
+)
 SAFE_PAYMENT_ANSWER = (
     "Pra te passar as condições de pagamento certinhas, me diz qual instrumento você quer "
     "que eu calculo o PIX e as parcelas pra você 😊"
@@ -155,7 +168,11 @@ def output_guard() -> OutputGuard:
                 correction_note=protocol_correction_note,
                 safe_answer=safe_protocol_answer,
             ),
-            PriceCheck(correction_note=price_correction_note, safe_answer=SAFE_PRICE_ANSWER),
+            PriceCheck(
+                correction_note=price_correction_note,
+                safe_answer=SAFE_PRICE_ANSWER,
+                forced_tools=CATALOG_PAYMENT_TOOLS,
+            ),
             TopicToolCheck(
                 topic_words=PAYMENT_TOPIC_WORDS,
                 detail_words=PAYMENT_DETAIL_WORDS,
@@ -165,6 +182,7 @@ def output_guard() -> OutputGuard:
                 correction_note=payment_correction_note,
                 safe_answer=SAFE_PAYMENT_ANSWER,
                 name="payment_tool",
+                forced_tools=CATALOG_PAYMENT_TOOLS,
             ),
             TopicToolCheck(
                 topic_words=("pix",),
@@ -174,6 +192,7 @@ def output_guard() -> OutputGuard:
                 correction_note=pix_correction_note,
                 safe_answer=SAFE_PAYMENT_ANSWER,
                 name="pix_value",
+                forced_tools=CATALOG_PAYMENT_TOOLS,
             ),
             PhraseCheck(
                 patterns=ROBOTIC_PATTERNS,
@@ -181,7 +200,8 @@ def output_guard() -> OutputGuard:
                 safe_answer=SAFE_REFUSAL_ANSWER,
                 name="robotic_phrase",
             ),
-        ]
+        ],
+        forced_tool_note=FORCED_TOOL_NOTE,
     )
 
 
