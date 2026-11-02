@@ -220,6 +220,18 @@ def test_delete_session_forgets_everything_and_anonymizes_handoffs(make_api, tmp
     assert (row.summary, row.contact, row.session_id) == (None, None, None)
 
 
+def test_delete_session_unbinds_its_customer(make_api, tmp_path):
+    lookup = call("get_order_status", {"order_id": 8, "email": "anacarol.ferreira@coldmail.com"})
+    client, _, _ = make_api(lookup, AIMessage("Seu pedido 8 foi enviado."))
+    with client:
+        chat(client, "pedido 8")
+        engine = make_engine(f"sqlite:///{tmp_path}/store.db")
+        assert SqlVerifiedOrders(engine).customer("s1") == 2  # bound to Ana (customer 2)
+        assert client.delete("/api/sessions/s1").status_code == 204
+    assert SqlVerifiedOrders(engine).customer("s1") is None
+    assert not SqlVerifiedOrders(engine).verified("s1", 8)
+
+
 def test_invalid_session_id_on_delete(make_api):
     client, _, _ = make_api()
     with client:
@@ -267,6 +279,11 @@ def test_identity_state_is_in_the_database(tmp_path):
     SqlVerifiedOrders(engine).record("s1", 8)  # idempotent
     assert SqlVerifiedOrders(engine).verified("s1", 8)
     assert not SqlVerifiedOrders(engine).verified("s2", 8)
+    # The session's customer lives in the DB too (shared by replicas, survives restarts).
+    assert SqlVerifiedOrders(engine).bind("s1", 2) == 2
+    assert SqlVerifiedOrders(engine).bind("s1", 6) == 2
+    assert SqlVerifiedOrders(engine).customer("s1") == 2
+    assert SqlVerifiedOrders(engine).customer("s2") is None
 
 
 def test_sqlite_connections_use_wal_and_busy_timeout(tmp_path):

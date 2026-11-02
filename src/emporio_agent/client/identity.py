@@ -2,6 +2,10 @@
 
 The session id comes from the tool's run config (`configurable.thread_id`, set by the agent's
 caller), never from a tool argument, so the model can't reset or choose the counter.
+
+One customer per conversation: the first successful check binds the session to that order's
+customer; later lookups only open that customer's orders (owner's test: orders of three
+customers opened in one session with number + email alone).
 """
 
 from __future__ import annotations
@@ -12,9 +16,10 @@ from typing import Protocol
 
 from langchain_core.runnables import RunnableConfig
 from sqlalchemy import Engine
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from emporio_agent.client.db.models import SessionVerifiedOrder
+from emporio_agent.client.db.models import SessionCustomer, SessionVerifiedOrder
 
 MAX_FAILED_LOOKUPS = 5  # AGENTS.md §7
 
@@ -33,6 +38,15 @@ ORDER_DATA_MISSING = (
     '{"error":"order_data_missing","message":"Ask the customer for the order number and the '
     'purchase email first. For a general rule question, use search_policies instead."}'
 )
+# In a bound conversation: for another customer's order, an unknown order or a wrong email
+# alike, so it never tells whether the order exists.
+OTHER_CUSTOMER = (
+    '{"error":"other_customer","message":"This conversation is linked to the customer whose '
+    "order was verified earlier, and no order of theirs matches this number and email. Kindly "
+    "explain that each conversation serves one person: for someone else's order, suggest "
+    "starting a new conversation; if the order is theirs, ask to check both. Never say whether "
+    'this order exists."}'
+)
 ORDER_NOT_VERIFIED = (
     '{"error":"order_not_verified","message":"This case is about an order: first ask the '
     "customer for the order number and purchase email and look it up (get_order_status), then "
@@ -50,11 +64,21 @@ class FailedLookupStore(Protocol):
 
 
 class VerifiedOrderStore(Protocol):
-    """Orders verified per session: `VerifiedOrders` (memory) or `SqlVerifiedOrders` (DB)."""
+    """Orders verified per session and the customer the session is bound to:
+    `VerifiedOrders` (memory) or `SqlVerifiedOrders` (DB)."""
 
     def record(self, session: str, order_id: int) -> None: ...
 
     def verified(self, session: str | None, order_id: int) -> bool: ...
+
+    def customer(self, session: str) -> int | None:
+        """The customer this session is bound to (None before the first verified order)."""
+        ...
+
+    def bind(self, session: str, customer_id: int) -> int:
+        """Bind the session to this customer unless it is bound already; returns the
+        session's customer (check-and-set, so two racing lookups can't bind two customers)."""
+        ...
 
 
 def session_id(config: RunnableConfig | None) -> str | None:
@@ -110,6 +134,23 @@ class SqlVerifiedOrders:
         with Session(self.engine) as db:
             return db.get(SessionVerifiedOrder, (session, order_id)) is not None
 
+    def customer(self, session: str) -> int | None:
+        with Session(self.engine) as db:
+            row = db.get(SessionCustomer, session)
+            return row.customer_id if row else None
+
+    def bind(self, session: str, customer_id: int) -> int:
+        try:
+            with Session(self.engine) as db, db.begin():
+                if (row := db.get(SessionCustomer, session)) is not None:
+                    return row.customer_id
+                db.add(SessionCustomer(session_id=session, customer_id=customer_id))
+            return customer_id
+        except IntegrityError:  # another replica bound it first (primary key): that one wins
+            bound = self.customer(session)
+            assert bound is not None
+            return bound
+
 
 class VerifiedOrders:
     """Orders whose number + email were checked successfully, per session (in memory; the API
@@ -117,6 +158,7 @@ class VerifiedOrders:
 
     def __init__(self) -> None:
         self._orders: dict[str, set[int]] = {}
+        self._customers: dict[str, int] = {}
         self._lock = threading.Lock()
 
     def record(self, session: str, order_id: int) -> None:
@@ -126,3 +168,11 @@ class VerifiedOrders:
     def verified(self, session: str | None, order_id: int) -> bool:
         with self._lock:
             return session is not None and order_id in self._orders.get(session, set())
+
+    def customer(self, session: str) -> int | None:
+        with self._lock:
+            return self._customers.get(session)
+
+    def bind(self, session: str, customer_id: int) -> int:
+        with self._lock:
+            return self._customers.setdefault(session, customer_id)

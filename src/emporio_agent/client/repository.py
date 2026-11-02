@@ -26,6 +26,7 @@ from emporio_agent.client.db.models import (
     OrderItem,
     Product,
     Promotion,
+    SessionCustomer,
     SessionVerifiedOrder,
 )
 from emporio_agent.client.rules import apply_discount, availability
@@ -110,6 +111,7 @@ class OrderInfo:
     """What an identified customer may see about their own order (no other customer data)."""
 
     order_id: int
+    customer_id: int  # binds the conversation to the customer; never sent to the model
     customer_first_name: str
     order_date: date
     status: str
@@ -332,6 +334,7 @@ class SqlStoreRepository:
                 return None
             return OrderInfo(
                 order_id=order.order_id,
+                customer_id=order.customer_id,
                 customer_first_name=order.customer.name.split()[0],
                 order_date=order.order_date,
                 status=order.status,
@@ -400,4 +403,5 @@ class SqlStoreRepository:
             session.execute(
                 delete(SessionVerifiedOrder).where(SessionVerifiedOrder.session_id == session_id)
             )
+            session.execute(delete(SessionCustomer).where(SessionCustomer.session_id == session_id))
         return anonymized

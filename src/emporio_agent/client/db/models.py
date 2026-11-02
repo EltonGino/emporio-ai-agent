@@ -146,5 +146,15 @@ class SessionVerifiedOrder(Base):
     order_id: Mapped[int] = mapped_column(primary_key=True)
 
 
+class SessionCustomer(Base):
+    """Runtime table: the customer a conversation is bound to after its first successful
+    order check (one customer per conversation). No foreign keys to store tables."""
+
+    __tablename__ = "session_customers"
+
+    session_id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    customer_id: Mapped[int]
+
+
 # Rebuilt from data/raw by the loader. Runtime tables (handoffs, sessions) are kept.
 STORE_MODELS: tuple[type[Base], ...] = (Category, Product, Customer, Order, OrderItem, Promotion)

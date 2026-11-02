@@ -230,7 +230,8 @@ def build_tools(
     verified_orders = verified_orders or identity.VerifiedOrders()
 
     def identified_order(order_id: int, email: str, config: RunnableConfig) -> OrderInfo | str:
-        """The order, or the error JSON to return. Same error for unknown order / wrong email."""
+        """The order, or the error JSON to return. Same error for unknown order / wrong email;
+        once the session is bound to a customer, one error for anything not theirs."""
         if not order_id or not email.strip():
             return identity.ORDER_DATA_MISSING  # not a failed attempt: nothing was checked
         session = identity.session_id(config)
@@ -242,7 +243,12 @@ def build_tools(
         order = repo.get_order_for_customer(order_id, email)
         if order is None:
             failed_lookups.record_failure(session, client)
-            return identity.ORDER_NOT_FOUND
+            bound = verified_orders.customer(session) is not None
+            return identity.OTHER_CUSTOMER if bound else identity.ORDER_NOT_FOUND
+        # One customer per conversation; a refusal counts as a failed attempt like any other.
+        if verified_orders.bind(session, order.customer_id) != order.customer_id:
+            failed_lookups.record_failure(session, client)
+            return identity.OTHER_CUSTOMER
         verified_orders.record(session, order.order_id)  # allows order-related handoffs
         return order
 

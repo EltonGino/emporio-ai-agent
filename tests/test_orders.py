@@ -66,7 +66,86 @@ def test_unknown_order_and_wrong_email_are_byte_identical(make_tools):
 def test_shared_email_only_opens_orders_of_its_own_customer(make_tools):
     tools = make_tools()  # D8: customers 11 and 43 share an email; order 10 is customer 11's
     assert json.loads(status(tools, 10, "bruno.martins@jmail.com"))["order_id"] == 10
-    assert status(tools, 8, "bruno.martins@jmail.com") == identity.ORDER_NOT_FOUND
+    # A fresh session: this one is now bound to customer 11 (see the binding tests below).
+    assert status(tools, 8, "bruno.martins@jmail.com", session("s2")) == identity.ORDER_NOT_FOUND
+
+
+# --- one customer per conversation ---------------------------------------------------------
+
+PEDRO = "pedro.oliveira@jmail.com"  # customer 3: orders 1 and 19
+JULIANA = "juliana.almeida@hayoo.com.br"  # order 9
+MATHEUS = "matheus.correia@hayoo.com.br"  # order 17
+
+
+def test_conversation_is_bound_to_the_first_verified_customer(make_tools):
+    """Owner's frontend test: orders 8, 9 and 17 (three customers) opened in one session."""
+    tools = make_tools()
+    assert json.loads(status(tools, 8, ANA))["customer_first_name"] == "Ana"
+    assert status(tools, 9, JULIANA) == identity.OTHER_CUSTOMER
+    assert status(tools, 17, MATHEUS) == identity.OTHER_CUSTOMER
+    assert json.loads(status(tools, 8, ANA))["order_id"] == 8  # still Ana's conversation
+
+
+def test_bound_conversation_never_tells_whether_an_order_exists(make_tools):
+    tools = make_tools()
+    status(tools, 8, ANA)
+    other_customers_order = status(tools, 9, JULIANA)  # exists, right email
+    unknown_order = status(tools, 999, JULIANA)
+    wrong_email = status(tools, 9, ANA)
+    assert other_customers_order == unknown_order == wrong_email == identity.OTHER_CUSTOMER
+    assert "Juliana" not in other_customers_order and "349" not in other_customers_order
+
+
+def test_same_customer_can_check_several_orders(make_tools):
+    tools = make_tools()
+    assert json.loads(status(tools, 1, PEDRO))["order_id"] == 1
+    assert json.loads(status(tools, 19, PEDRO))["order_id"] == 19
+
+
+def test_new_conversation_serves_another_customer(make_tools):
+    tools = make_tools()
+    status(tools, 8, ANA, session("ana"))
+    assert json.loads(status(tools, 9, JULIANA, session("juliana")))["order_id"] == 9
+
+
+def test_return_eligibility_follows_the_same_binding(make_tools):
+    tools = make_tools("2026-02-20T10:00")
+    status(tools, 8, ANA)
+    result = tools["check_return_eligibility"].invoke(
+        {"order_id": 7, "email": LETICIA, "reason": "arrependimento"}, config=session()
+    )
+    assert result == identity.OTHER_CUSTOMER
+
+
+def test_refusals_in_a_bound_conversation_count_toward_the_lockout(make_tools):
+    tools = make_tools()
+    status(tools, 8, ANA)
+    for _ in range(identity.MAX_FAILED_LOOKUPS):
+        assert status(tools, 9, JULIANA) == identity.OTHER_CUSTOMER
+    assert status(tools, 8, ANA) == identity.TOO_MANY_ATTEMPTS
+
+
+def test_order_handoff_needs_an_order_of_the_bound_customer(make_tools):
+    tools = make_tools()
+    status(tools, 8, ANA)
+    status(tools, 9, JULIANA)  # refused: order 9 is not verified in this conversation
+    handoff = tools["handoff_to_human"].invoke(
+        {
+            "reason": "delayed_order",
+            "summary": "Pedido 9 atrasado, cliente pede retorno",
+            "order_id": 9,
+        },
+        config=session(),
+    )
+    assert handoff == identity.ORDER_NOT_VERIFIED
+
+
+def test_in_memory_binding_is_check_and_set():
+    store = identity.VerifiedOrders()
+    assert store.customer("s") is None
+    assert store.bind("s", 2) == 2
+    assert store.bind("s", 6) == 2  # the first customer stays
+    assert store.customer("s") == 2 and store.customer("other") is None
 
 
 def test_no_other_customer_data_in_output(make_tools):
