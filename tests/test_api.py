@@ -260,3 +260,112 @@ def test_serves_the_built_frontend(make_api, tmp_path):
     with client:
         assert "Empório" in client.get("/").text
         assert client.get("/api/health").json() == {"status": "ok"}  # API still wins
+
+
+# --- per-IP limits and real client IP (security) ---------------------------------------------
+
+from datetime import date  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
+
+from starlette.datastructures import Headers  # noqa: E402
+
+from emporio_agent.api.main import client_ip, client_key  # noqa: E402
+from emporio_agent.client import identity  # noqa: E402
+from emporio_agent.client.identity import FailedLookups  # noqa: E402
+
+
+def fake_request(peer: str, *forwarded: str):
+    headers = Headers(raw=[(b"x-forwarded-for", f.encode()) for f in forwarded])
+    return SimpleNamespace(client=SimpleNamespace(host=peer), headers=headers)
+
+
+@pytest.mark.parametrize(
+    ("hops", "forwarded", "expected"),
+    [
+        (0, ["6.6.6.6"], "10.0.0.1"),  # no trusted proxy: a forged header is ignored
+        (1, ["6.6.6.6, 203.0.113.7"], "203.0.113.7"),  # our proxy appended the real one
+        (1, ["6.6.6.6", "203.0.113.7"], "203.0.113.7"),  # repeated headers count as one list
+        (2, ["6.6.6.6, 203.0.113.7, 10.1.1.1"], "203.0.113.7"),
+        (1, [], "10.0.0.1"),  # header missing: fall back to the peer
+    ],
+)
+def test_client_ip_trusts_x_forwarded_for_only_behind_a_configured_proxy(hops, forwarded, expected):
+    assert client_ip(fake_request("10.0.0.1", *forwarded), hops) == expected
+
+
+def test_client_key_is_a_salted_hash():
+    key = client_key("203.0.113.7", "salt")
+    assert key == client_key("203.0.113.7", "salt") and "203" not in key and len(key) == 32
+    assert key != client_key("203.0.113.7", "other-salt")
+
+
+def test_per_ip_daily_limit_across_sessions(make_api):
+    client, _, _ = make_api(AIMessage("1"), AIMessage("2"), ip_daily_message_cap=2)
+    with client:
+        assert chat(client, session_id="a").status_code == 200
+        assert chat(client, session_id="b").status_code == 200  # a new session doesn't help
+        blocked = chat(client, session_id="c")
+    assert blocked.status_code == 429 and "muitas mensagens hoje" in blocked.json()["detail"]
+
+
+def test_forged_x_forwarded_for_does_not_bypass_the_ip_limit(make_api):
+    client, _, _ = make_api(AIMessage("1"), ip_daily_message_cap=1)  # TRUSTED_PROXY_HOPS=0
+    with client:
+        body = {"session_id": "a", "message": "oi"}
+        assert client.post(
+            "/api/chat", json=body, headers={"X-Forwarded-For": "1.1.1.1"}
+        ).is_success
+        body = {"session_id": "b", "message": "oi"}
+        second = client.post("/api/chat", json=body, headers={"X-Forwarded-For": "2.2.2.2"})
+    assert second.status_code == 429
+
+
+def test_behind_a_trusted_proxy_each_client_ip_has_its_own_limit(make_api):
+    client, _, _ = make_api(
+        AIMessage("1"), AIMessage("2"), ip_daily_message_cap=1, trusted_proxy_hops=1
+    )
+    with client:
+        for session_id, ip in (("a", "203.0.113.7"), ("b", "198.51.100.9")):
+            body = {"session_id": session_id, "message": "oi"}
+            assert client.post("/api/chat", json=body, headers={"X-Forwarded-For": ip}).is_success
+        body = {"session_id": "c", "message": "oi"}
+        again = client.post("/api/chat", json=body, headers={"X-Forwarded-For": "203.0.113.7"})
+    assert again.status_code == 429
+
+
+def test_identity_lockout_counts_per_ip_across_new_sessions(make_api):
+    """Before: 5 failures per session, bypassed by opening a new session."""
+    wrong = call("get_order_status", {"order_id": 8, "email": "x@y.z"})
+    script = []
+    for _ in range(3):
+        script += [wrong, AIMessage("Não encontrei.")]
+    client, _, _ = make_api(*script, ip_identity_failure_limit=2)
+    with client:
+        results = []
+        for session_id in ("a", "b", "c"):  # one failure per session, all from the same IP
+            events = sse_events(chat(client, "pedido 8", session_id=session_id))
+            results += [e["data"]["result_preview"] for e in events if e["type"] == "tool_end"]
+    assert "order_not_found" in results[0] and "order_not_found" in results[1]
+    assert "too_many_attempts" in results[2]  # locked by IP, although "c" is a new session
+
+
+def test_sql_lockout_per_client_resets_the_next_day(tmp_path):
+    engine = make_engine(f"sqlite:///{tmp_path}/store.db")
+    ensure_store_data(engine)
+    create_session_tables(engine)
+    day = {"today": date(2026, 3, 25)}
+    lookups = SqlFailedLookups(engine, 5, client_limit=2, today=lambda: day["today"])
+    lookups.record_failure("s1", "ip-a")
+    lookups.record_failure("s2", "ip-a")
+    assert lookups.locked("s3", "ip-a") and not lookups.locked("s3", "ip-b")
+    day["today"] = date(2026, 3, 26)
+    assert not lookups.locked("s3", "ip-a")  # a shared IP isn't locked forever
+
+
+def test_in_memory_lockout_per_client():
+    lookups = FailedLookups(limit=5, client_limit=2)
+    lookups.record_failure("s1", "ip")
+    lookups.record_failure("s2", "ip")
+    assert lookups.locked("s3", "ip") and not lookups.locked("s3", None)
+    assert identity.client_key({"configurable": {"client_key": "k"}}) == "k"
+    assert identity.client_key(None) is None

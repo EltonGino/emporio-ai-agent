@@ -12,6 +12,7 @@ state.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
@@ -66,6 +67,10 @@ LIMIT_MESSAGES = {
     "session_limit": (
         "Esta conversa chegou ao limite de mensagens da demonstração. "
         "Clique em “Nova conversa” para continuar 😊"
+    ),
+    "client_limit": (
+        "Você já enviou muitas mensagens hoje nesta demonstração. "
+        "Volte amanhã, vai ser um prazer te atender! 🎶"
     ),
     "daily_cap": (
         "O atendimento de demonstração atingiu o limite de mensagens de hoje. "
@@ -149,12 +154,18 @@ async def open_runtime(
             await saver.setup()  # tables exist before the first delete/cleanup
             agent = None
             if agent_builder is not None:
+                failed_lookups = SqlFailedLookups(
+                    engine,
+                    MAX_FAILED_LOOKUPS,
+                    client_limit=settings.ip_identity_failure_limit,
+                    today=lambda: SystemClock(client.store.tz).now().date(),
+                )
                 agent = await asyncio.to_thread(
                     agent_builder,
                     settings,
                     client,
                     saver,
-                    SqlFailedLookups(engine, MAX_FAILED_LOOKUPS),
+                    failed_lookups,
                     SqlVerifiedOrders(engine),
                 )
             yield ApiState(
@@ -169,6 +180,27 @@ async def open_runtime(
     finally:
         await async_engine.dispose()
         engine.dispose()
+
+
+def client_ip(request: Request, trusted_proxy_hops: int) -> str:
+    """The caller's IP. X-Forwarded-For is read only when the app is explicitly configured to
+    sit behind N trusted proxies; then the N-th entry from the right is the address our own
+    proxy saw (entries to its left are whatever the client sent, and can be forged)."""
+    peer = request.client.host if request.client else "unknown"
+    if trusted_proxy_hops <= 0:
+        return peer
+    forwarded = [
+        part.strip()
+        for header in request.headers.getlist("x-forwarded-for")
+        for part in header.split(",")
+        if part.strip()
+    ]
+    return forwarded[-trusted_proxy_hops] if len(forwarded) >= trusted_proxy_hops else peer
+
+
+def client_key(ip: str, salt: str) -> str:
+    """Opaque per-client key: IPs are personal data (LGPD), so only a salted hash is stored."""
+    return hashlib.sha256(f"{salt}|{ip}".encode()).hexdigest()[:32]
 
 
 def for_client(event: AgentEvent, demo_mode: bool) -> AgentEvent | None:
@@ -234,17 +266,20 @@ def create_app(
         state: ApiState = request.app.state.api
         # Demo caps use the real store-local day, not AGENT_NOW (a frozen clock never resets).
         day = SystemClock(client.store.tz).now().date()
+        key = client_key(client_ip(request, settings.trusted_proxy_hops), settings.ip_hash_salt)
         admission = await state.sessions.admit(
             body.session_id,
             utcnow(),
             day,
             settings.max_messages_per_session,
             settings.daily_message_cap,
+            client_key=key,
+            client_cap=settings.ip_daily_message_cap,
         )
         if not admission.allowed:
             return JSONResponse({"detail": LIMIT_MESSAGES[admission.reason]}, status_code=429)
         return StreamingResponse(
-            _sse(state, body.session_id, body.message),
+            _sse(state, body.session_id, body.message, key),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
@@ -262,8 +297,9 @@ def create_app(
     return app
 
 
-async def _sse(state: ApiState, session_id: str, message: str) -> AsyncIterator[str]:
-    async for event in astream_turn(state.agent, session_id, message):
+async def _sse(state: ApiState, session_id: str, message: str, key: str) -> AsyncIterator[str]:
+    # The client key reaches the tools through the run config (per-IP identity lockout).
+    async for event in astream_turn(state.agent, session_id, message, context={"client_key": key}):
         await asyncio.to_thread(state.tracer.write, event)  # the trace keeps everything
         if (visible := for_client(event, state.settings.demo_mode)) is not None:
             yield f"data: {visible.model_dump_json()}\n\n"
@@ -273,7 +309,10 @@ app = create_app()
 
 
 def run() -> None:
-    """Console script `emporio-api`: uvicorn on 127.0.0.1:8000 (the Vite dev proxy target)."""
+    """Console script `emporio-api`: uvicorn on 127.0.0.1:8000 (the Vite dev proxy target).
+    `proxy_headers=False`: uvicorn would otherwise trust X-Forwarded-For from localhost on its
+    own; the app decides with TRUSTED_PROXY_HOPS (run uvicorn directly with
+    `--no-proxy-headers` too)."""
     import uvicorn
 
-    uvicorn.run("emporio_agent.api.main:app", host="127.0.0.1", port=8000)
+    uvicorn.run("emporio_agent.api.main:app", host="127.0.0.1", port=8000, proxy_headers=False)

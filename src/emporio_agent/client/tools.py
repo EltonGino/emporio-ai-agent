@@ -221,11 +221,12 @@ def build_tools(
         session = identity.session_id(config)
         if session is None:
             return identity.NO_SESSION
-        if failed_lookups.locked(session):
+        client = identity.client_key(config)  # per-IP lockout: new sessions don't reset it
+        if failed_lookups.locked(session, client):
             return identity.TOO_MANY_ATTEMPTS
         order = repo.get_order_for_customer(order_id, email)
         if order is None:
-            failed_lookups.record_failure(session)
+            failed_lookups.record_failure(session, client)
             return identity.ORDER_NOT_FOUND
         verified_orders.record(session, order.order_id)  # allows order-related handoffs
         return order

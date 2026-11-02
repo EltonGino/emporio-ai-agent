@@ -78,8 +78,15 @@ class _Turn:
     """Turns raw `agent.stream` chunks into AgentEvents (shared by the sync and async
     streams)."""
 
-    def __init__(self, session_id: str, text: str, retrieval_tools: Sequence[str]) -> None:
+    def __init__(
+        self,
+        session_id: str,
+        text: str,
+        retrieval_tools: Sequence[str],
+        context: dict[str, Any] | None = None,
+    ) -> None:
         self.session_id = session_id
+        self.context = context or {}
         self.text = text
         self.retrieval_tools = retrieval_tools
         self.started = time.monotonic()
@@ -96,7 +103,7 @@ class _Turn:
 
     @property
     def config(self) -> dict[str, Any]:
-        return {"configurable": {"thread_id": self.session_id}}
+        return {"configurable": {**self.context, "thread_id": self.session_id}}
 
     def chunk(self, mode: str, chunk: Any) -> list[AgentEvent]:
         if mode == "custom":
@@ -182,10 +189,12 @@ async def astream_turn(
     session_id: str,
     text: str,
     retrieval_tools: Sequence[str] = ("search_policies",),
+    context: dict[str, Any] | None = None,
 ) -> AsyncIterator[AgentEvent]:
     """Async `stream_turn` (the API): async model calls and checkpointer; sync tools run in
-    LangChain's worker threads, so the event loop is never blocked."""
-    turn = _Turn(session_id, text, retrieval_tools)
+    LangChain's worker threads, so the event loop is never blocked. `context` adds entries to
+    the run config the tools read (e.g. the client key for the per-IP lockout)."""
+    turn = _Turn(session_id, text, retrieval_tools, context)
     yield turn.event("user_message", text=text)
     try:
         async for mode, chunk in agent.astream(turn.input, turn.config, stream_mode=STREAM_MODES):

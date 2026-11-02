@@ -56,6 +56,15 @@ class Settings(BaseSettings):
     demo_mode: bool = False
     max_messages_per_session: int = Field(default=15, ge=1)
     daily_message_cap: int = Field(default=60, ge=1)  # all sessions, per store-local day
+    # Per client IP (hashed), per store-local day: messages, and failed order identity checks
+    # (the per-session lockout alone can be bypassed by opening new sessions).
+    ip_daily_message_cap: int = Field(default=30, ge=1)
+    ip_identity_failure_limit: int = Field(default=10, ge=1)
+    # 0 = use the TCP peer and ignore X-Forwarded-For (a client can forge it). N = the app sits
+    # behind N trusted reverse proxies (e.g. 1 on Hugging Face Spaces): use the N-th address
+    # from the right of X-Forwarded-For, the one our own proxy appended.
+    trusted_proxy_hops: int = Field(default=0, ge=0)
+    ip_hash_salt: str = ""  # set in production: IPs are stored only as salted hashes
     session_retention_days: int = Field(default=30, ge=1)
     history_max_messages: int = Field(default=20, ge=2)
     history_max_tokens: int = Field(default=2500, ge=200)

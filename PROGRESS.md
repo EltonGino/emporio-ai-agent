@@ -40,7 +40,7 @@ the video, then the 4 quota-cut eval cases / a full eval run if quota is left.
 | 14 | CLI with debug mode | done | `feat(cli): interactive CLI with debug mode` (f8ea8e2); `fix(agent): price guard, alternatives, verified-order handoffs and promotions` (2e40cf1) |
 | 15 | Routing + adversarial evals | prepared (not run) | `test: routing and adversarial eval cases and runner` (f544c30) |
 | 16 | CI workflow | done (not yet run on GitHub) | `ci: lint and tests workflow` (af62cb5) |
-| 17 | FastAPI (SSE, sessions, rate limit, retention, deletion) | done | `feat(api): FastAPI with SSE, sessions, rate limit, retention and deletion` |
+| 17 | FastAPI (SSE, sessions, rate limit, retention, deletion) | done | `feat(api): FastAPI with SSE, sessions, rate limit, retention and deletion` (a16d38a); `feat(api): per-IP limits and identity lockout behind trusted proxies` |
 | 18 | Frontend scaffold | done | `feat(frontend): Vite React scaffold` (d8dbbdc) |
 | 19 | Chat UI with streaming | done (mock API; real API in step 17) | `feat(frontend): customer service chat with streaming` (4ae5145) |
 | 20 | Bastidores panel + simulated date banner | done (mock API) | `feat(frontend): demo-mode behind-the-scenes panel and simulated date banner` (1979f10); `fix(agent): refusals in Tom's voice` (3515048); `fix(agent): refusal examples, phrase guard, optional order data, injection rule` (30f7830); `test: eval reports tool args and guard interventions as a metric` (eb89dce); `test: injected-instruction criterion and pending eval re-runs` (d67afd5) |
@@ -952,6 +952,28 @@ the video, then the 4 quota-cut eval cases / a full eval run if quota is left.
   are not serialized (LangGraph checkpoint race; the UI sends one at a time); JSONL traces are
   local files, so several replicas would need a shared volume or a log pipeline; the
   checkpointer is SQLite (Postgres saver = production path).
+- **Per-IP protection (owner, 2026-11-02, after the step 17 review):** (a) `/api/chat` also
+  enforces **`IP_DAILY_MESSAGE_CAP`** (default 30 per client per store-local day), in the same
+  atomic admission transaction as the per-session and global caps (new 429 message "Você já
+  enviou muitas mensagens hoje…"); (b) failed order identity checks are also counted **per
+  client and day** (`IP_IDENTITY_FAILURE_LIMIT`, default 10): opening new sessions no longer
+  resets the lockout (`SqlFailedLookups(engine, 5, client_limit, today)`; the in-memory
+  `FailedLookups` got the same option); the per-day window avoids locking a shared IP (NAT)
+  forever. Both live in `client_daily_counts(client_key, day, message_count,
+  failed_identity_checks)`. The client key reaches the tools through the **run config**
+  (`configurable.client_key`, like the session id — never a tool argument). (c) The client IP
+  is the TCP peer unless **`TRUSTED_PROXY_HOPS=N`** is set; then the N-th entry from the right
+  of `X-Forwarded-For` (the one our own proxy appended; entries to its left can be forged) —
+  set `1` on Hugging Face Spaces. `emporio-api` runs uvicorn with `proxy_headers=False` (else
+  uvicorn itself would trust X-Forwarded-For from localhost); with the uvicorn CLI use
+  `--no-proxy-headers`. IPs are personal data (LGPD): only `sha256(IP_HASH_SALT|ip)[:32]` is
+  stored — set `IP_HASH_SALT` in production.
+- **README security section (owner, 2026-11-02):** (1) authentication by order number +
+  purchase e-mail is **weak** (both can be known by others); production would use a one-time
+  code (OTP by e-mail/WhatsApp) or a logged-in customer; the lockouts only slow guessing.
+  (2) Every **future tool that changes data** (cancel an order, change an address, issue a
+  refund…) must require an **explicit confirmation validated in code** (not only asked for in
+  the prompt), covered by tests — the same principle as the verified-order rule for handoffs.
 - **Convention** — The "Commit" column holds the commit subject; hashes are in `git log`
   (a commit cannot contain its own hash).
 
@@ -1362,3 +1384,13 @@ the video, then the 4 quota-cut eval cases / a full eval run if quota is left.
   pedido atrasado" → asks for order number + e-mail, no handoff (a second 429 moved to qwen);
   DELETE → 204, trace file and checkpoints removed; `/` serves the real frontend build
   (screenshot `frontend/screenshots/api-real-inicio.png`: config from the API, AGENTS.md chips).
+
+### 2026-11-02 14:30 — Per-IP limits and identity lockout (owner)
+- Done: `IP_DAILY_MESSAGE_CAP`, `IP_IDENTITY_FAILURE_LIMIT`, `TRUSTED_PROXY_HOPS`,
+  `IP_HASH_SALT`; `client_daily_counts` table; per-client lockout (DB and memory); client key in
+  the run config; safe client IP resolution; uvicorn without proxy headers.
+- Files: `src/emporio_agent/{config.py,api/main.py,core/sessions.py,core/events.py,
+  client/identity.py,client/tools.py}`, `.env.example`, `tests/test_api.py`, `PROGRESS.md`.
+- Tests: ruff ok, format ok, `pytest -m "not llm"` 385 passed (forged X-Forwarded-For ignored
+  without a trusted proxy; trusted-proxy resolution; salted key; per-IP cap across sessions;
+  per-IP lockout across new sessions through the API; next-day reset).

@@ -41,12 +41,12 @@ ORDER_NOT_VERIFIED = (
 
 
 class FailedLookupStore(Protocol):
-    """Failed identity checks per session: `FailedLookups` (memory) or
+    """Failed identity checks per session and per client: `FailedLookups` (memory) or
     `core.sessions.SqlFailedLookups` (database, API)."""
 
-    def locked(self, session: str) -> bool: ...
+    def locked(self, session: str, client: str | None = None) -> bool: ...
 
-    def record_failure(self, session: str) -> None: ...
+    def record_failure(self, session: str, client: str | None = None) -> None: ...
 
 
 class VerifiedOrderStore(Protocol):
@@ -61,21 +61,35 @@ def session_id(config: RunnableConfig | None) -> str | None:
     return ((config or {}).get("configurable") or {}).get("thread_id")
 
 
-class FailedLookups:
-    """Counts failed identity checks per session (in memory; shared by both order tools)."""
+def client_key(config: RunnableConfig | None) -> str | None:
+    """Opaque key of the caller (the API's salted IP hash), from the run config like the
+    session id — never a tool argument. None outside the API (CLI, evals)."""
+    return ((config or {}).get("configurable") or {}).get("client_key")
 
-    def __init__(self, limit: int = MAX_FAILED_LOOKUPS) -> None:
+
+class FailedLookups:
+    """Counts failed identity checks per session and per client (in memory: CLI and tests;
+    the API uses `core.sessions.SqlFailedLookups`). Shared by both order tools."""
+
+    def __init__(self, limit: int = MAX_FAILED_LOOKUPS, client_limit: int | None = None) -> None:
         self.limit = limit
+        self.client_limit = client_limit
         self._failures: Counter[str] = Counter()
+        self._by_client: Counter[str] = Counter()
         self._lock = threading.Lock()
 
-    def locked(self, session: str) -> bool:
+    def locked(self, session: str, client: str | None = None) -> bool:
         with self._lock:
-            return self._failures[session] >= self.limit
+            if self._failures[session] >= self.limit:
+                return True
+            limit = self.client_limit
+            return client is not None and limit is not None and self._by_client[client] >= limit
 
-    def record_failure(self, session: str) -> None:
+    def record_failure(self, session: str, client: str | None = None) -> None:
         with self._lock:
             self._failures[session] += 1
+            if client is not None:
+                self._by_client[client] += 1
 
 
 class SqlVerifiedOrders:
