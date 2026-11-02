@@ -1907,4 +1907,15 @@ then fill the README TODOs (example links, video link, final 120b eval run).
 - Facts corrected while checking the draft: the persona prompt is now ≈ 1,750 tokens
   (chars/4; 1,150 at the step 12 measurement); `scripts/record_conversations.py` doesn't exist
   yet (step 22), so the README makes no claim about per-example dates.
+- **README review adjustments (owner, for quick reading):** "At a glance" block (6 bullets with
+  links); "Case requirements → where to find it" table (how to run, persona, data vs. policies,
+  out of scope, examples, decisions, limitations, AI usage, commit history); `<details>` for
+  the data-handling table, the 120b first-run failures and the forced-tool provider note;
+  internal step references removed (TODOs now "example conversations" / "demo video");
+  "Bastidores (behind the scenes)" at the first mention; the "AI usage is disclosed here…"
+  line removed. Two link targets added: a "Data vs. policies" paragraph in Architecture
+  (data tools vs. `search_policies` vs. computed rules) and the out-of-scope rule (unrelated
+  topics declined in one sentence) in Persona and tone; both match the prompt and tools.
+  Rendering checked with GitHub's own GFM renderer (`gh api markdown`, nothing published):
+  7/7 tables render, including the two inside `<details>`; Mermaid block and 3 images present.
 
