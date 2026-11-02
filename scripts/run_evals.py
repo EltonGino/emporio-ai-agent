@@ -1,6 +1,7 @@
 """Run the end-to-end evals against the real LLM provider and print a report.
 
-Usage: uv run python scripts/run_evals.py [--llm-model openai/gpt-oss-20b] [--cases id1,id2]
+Usage: uv run python scripts/run_evals.py [--llm-model openai/gpt-oss-20b] [--llm-provider groq]
+                                          [--cases id1,id2]
                                           [--suite routing|adversarial|all] [--pace 20]
 Needs GROQ_API_KEY. Each case runs in a fresh session with its own store DB copy; --pace
 waits between turns (free tier: 8K tokens per minute per model). A JSON report is written to
@@ -30,6 +31,7 @@ REPORTS = PROJECT_ROOT / "data" / "runtime" / "evals"
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--llm-model", help="run on this model only, e.g. openai/gpt-oss-20b")
+    parser.add_argument("--llm-provider", help="groq | ollama (default: LLM_PROVIDER)")
     parser.add_argument("--cases", help="comma-separated case ids")
     parser.add_argument("--suite", choices=[*SUITES, "all"], default="all")
     parser.add_argument("--pace", type=float, default=20.0, help="seconds between turns/cases")
@@ -44,7 +46,12 @@ def main() -> int:
     settings = get_settings()
     with tempfile.TemporaryDirectory() as workdir:
         factory = eval_agent_factory(
-            settings, get_client_config(), get_retrievers()[2], Path(workdir), args.llm_model
+            settings,
+            get_client_config(),
+            get_retrievers()[2],
+            Path(workdir),
+            args.llm_model,
+            args.llm_provider,
         )
         results = []
         for i, case in enumerate(cases):
@@ -67,7 +74,7 @@ def main() -> int:
                 print(f"      answer: {result.transcript.answers[-1][:300]!r}")
 
     passed = sum(r.passed for r in results)
-    model = args.llm_model or settings.llm_model
+    model = f"{args.llm_provider or settings.llm_provider}:{args.llm_model or settings.llm_model}"
     total_tokens = sum(r.transcript.input_tokens for r in results)
     turns = sum(len(r.case.turns) for r in results)
     limits = sum(n.get("kind") == "rate_limit" for r in results for n in r.transcript.notices)

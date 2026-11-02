@@ -19,6 +19,11 @@ def pytest_addoption(parser):
         help="run the llm evals on this model only (e.g. openai/gpt-oss-20b)",
     )
     parser.addoption(
+        "--llm-provider",
+        default=None,
+        help="run the llm evals on this provider (groq | ollama; default: LLM_PROVIDER)",
+    )
+    parser.addoption(
         "--eval-pace",
         type=float,
         default=20.0,

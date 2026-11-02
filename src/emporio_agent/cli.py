@@ -21,6 +21,7 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.text import Text
 
+from emporio_agent.client.assistant import with_llm
 from emporio_agent.clock import Clock, FixedClock, get_clock
 from emporio_agent.config import TRACES_DIR, ClientConfig, Settings, get_client_config, get_settings
 from emporio_agent.core.events import AgentEvent, stream_turn
@@ -131,6 +132,15 @@ def chat(
             help="Simulated store time, ISO (e.g. 2026-03-25T10:30). Overrides AGENT_NOW."
         ),
     ] = None,
+    provider: Annotated[
+        str | None, typer.Option(help="LLM provider (groq | ollama). Overrides LLM_PROVIDER.")
+    ] = None,
+    model: Annotated[
+        str | None,
+        typer.Option(
+            help="LLM model, e.g. openai/gpt-oss-20b or gpt-oss:20b. Overrides LLM_MODEL."
+        ),
+    ] = None,
 ) -> None:
     # Middleware decisions are shown by --debug and kept in the JSONL trace; don't let Python's
     # last-resort logging handler print them in the customer's terminal.
@@ -138,7 +148,8 @@ def chat(
     package_logger.addHandler(logging.NullHandler())
     package_logger.propagate = False
 
-    settings, client = get_settings(), get_client_config()
+    settings = with_llm(get_settings(), provider, model)
+    client = get_client_config()
     clock = get_clock(parse_now(now))
     if settings.llm_provider == "groq" and not os.environ.get("GROQ_API_KEY"):
         console.print("[red]GROQ_API_KEY não definida.[/] Copie .env.example para .env e preencha.")

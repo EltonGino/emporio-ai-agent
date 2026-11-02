@@ -46,6 +46,10 @@ class Settings(BaseSettings):
         "openai/gpt-oss-20b",
         "qwen/qwen3.8-27b",
     ]
+    # LLM_PROVIDER=ollama (local development): OLLAMA_BASE_URL, and an explicit context window
+    # (Ollama's default is small and would silently cut the ~2,500-token prompt + tools).
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_num_ctx: int = Field(default=16384, ge=4096)
     llm_temperature: float = 0.2
     # Reasoning tokens count against the rate limits, so keep reasoning short.
     llm_reasoning_effort: Literal["low", "medium", "high"] = "low"

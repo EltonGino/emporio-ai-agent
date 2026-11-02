@@ -40,7 +40,7 @@ the video, then the 4 quota-cut eval cases / a full eval run if quota is left.
 | 14 | CLI with debug mode | done | `feat(cli): interactive CLI with debug mode` (f8ea8e2); `fix(agent): price guard, alternatives, verified-order handoffs and promotions` (2e40cf1) |
 | 15 | Routing + adversarial evals | prepared (not run) | `test: routing and adversarial eval cases and runner` (f544c30) |
 | 16 | CI workflow | done (not yet run on GitHub) | `ci: lint and tests workflow` (af62cb5) |
-| 17 | FastAPI (SSE, sessions, rate limit, retention, deletion) | done | `feat(api): FastAPI with SSE, sessions, rate limit, retention and deletion` (a16d38a); `feat(api): per-IP limits and identity lockout behind trusted proxies` |
+| 17 | FastAPI (SSE, sessions, rate limit, retention, deletion) | done | `feat(api): FastAPI with SSE, sessions, rate limit, retention and deletion` (a16d38a); `feat(api): per-IP limits and identity lockout behind trusted proxies` (8113004); `feat(agent): Ollama as a local development provider` |
 | 18 | Frontend scaffold | done | `feat(frontend): Vite React scaffold` (d8dbbdc) |
 | 19 | Chat UI with streaming | done (mock API; real API in step 17) | `feat(frontend): customer service chat with streaming` (4ae5145) |
 | 20 | Bastidores panel + simulated date banner | done (mock API) | `feat(frontend): demo-mode behind-the-scenes panel and simulated date banner` (1979f10); `fix(agent): refusals in Tom's voice` (3515048); `fix(agent): refusal examples, phrase guard, optional order data, injection rule` (30f7830); `test: eval reports tool args and guard interventions as a metric` (eb89dce); `test: injected-instruction criterion and pending eval re-runs` (d67afd5) |
@@ -974,6 +974,43 @@ the video, then the 4 quota-cut eval cases / a full eval run if quota is left.
   (2) Every **future tool that changes data** (cancel an order, change an address, issue a
   refund…) must require an **explicit confirmation validated in code** (not only asked for in
   the prompt), covered by tests — the same principle as the verified-order rule for handoffs.
+- **Ollama for local development (owner, 2026-11-02).** **Local mode is for development
+  only; official metrics, eval scores and the recorded examples use gpt-oss-120b on Groq.**
+  Owner's server: Ollama 0.40.13 at `http://elton:11434` (Tailscale), model `gpt-oss:20b`.
+  `LLM_PROVIDER=ollama`, `LLM_MODEL=gpt-oss:20b`, `OLLAMA_BASE_URL`, **`OLLAMA_NUM_CTX`**
+  (default 16384, floor 4096: Ollama's small default would silently cut the ≈ 2,500-token
+  prompt + tool schemas), via the official `langchain-ollama` 1.1.0 (`ollama` 0.6.3).
+- **Ollama [VERIFY] (2026-11-02, against the owner's server):** `ChatOllama(reasoning=...)`
+  is sent as Ollama's `think`; for gpt-oss it accepts `"low"|"medium"|"high"`, so
+  `LLM_REASONING_EFFORT` is passed through. With `reasoning` set, the reasoning comes back in
+  `AIMessage.additional_kwargs["reasoning_content"]` and `content` holds only the answer
+  (checked live: content "A capital do Mato Grosso do Sul é Campo Grande.", reasoning "Need
+  answer in Portuguese, short sentence."); with `reasoning=None` the model still thinks at its
+  default effort (76 vs 29 output tokens) and the thinking is dropped. Either way it never
+  reaches `content`, so the existing "only content is emitted" path holds. Unlike ChatGroq,
+  **ChatOllama sends `reasoning_content` back** with later messages → `trim_history` now drops
+  reasoning from compacted past turns (the current turn keeps it, as gpt-oss expects within a
+  tool-calling chain). Ollama reports no reasoning/cached token counts (usage shows 0).
+  Unparsable tool arguments raise `OutputParserException` in langchain-ollama.
+- **Provider-specific error handling (owner):** `provider_error_policy(settings)`: Groq keeps
+  429 + retry-after waits, the 400 `tool_use_failed` retry and the model fallback chain;
+  **Ollama: one model, no 429 handling** (`rate_limits=False`), and an invalid tool call
+  (`is_local_invalid_tool_call`: OutputParserException or a server error about a tool call)
+  gets **one plain retry**, then the polite failure message. `model_chain` ignores
+  `LLM_FALLBACK_MODELS` for non-Groq providers.
+- **Provider/model by argument (owner):** CLI `--provider` / `--model`; evals
+  `scripts/run_evals.py --llm-provider ... --llm-model ...` and pytest `--llm-provider`; the
+  `.env` stays the default (`client.assistant.with_llm`).
+- **Ollama smoke test (2026-11-02, gpt-oss:20b on the owner's PC, CLI `--debug`):**
+  (1) "Quanto custa o Takamine GD20 no PIX?" → `search_products` only; the first answer
+  computed the PIX price itself ("R$ 2.089,05", right value but not from a tool) → the price
+  guard held it and asked again → **the corrected answer was wrong**: "Se preferir pagar via
+  PIX, o valor permanece o mesmo" (PIX is 5% off). 3 model calls (one discarded), 7,686 input
+  tokens, 1.9 s. (2) "Qual o prazo para trocar um produto com defeito?" → `search_policies`
+  (4.2 at rank 1) → "30 dias corridos a partir da compra… a Empório pode intermediar…",
+  2 calls, 5,427 input tokens, 0.9 s. Finding to discuss: the guard stops unverified numbers
+  but not a wrong rule stated in words; the model skipped `calculate_payment_options` for a
+  PIX question.
 - **Convention** — The "Commit" column holds the commit subject; hashes are in `git log`
   (a commit cannot contain its own hash).
 
@@ -1394,3 +1431,13 @@ the video, then the 4 quota-cut eval cases / a full eval run if quota is left.
 - Tests: ruff ok, format ok, `pytest -m "not llm"` 385 passed (forged X-Forwarded-For ignored
   without a trusted proxy; trusted-proxy resolution; salted key; per-IP cap across sessions;
   per-IP lockout across new sessions through the API; next-day reset).
+
+### 2026-11-02 15:30 — Ollama as a local development provider (owner)
+- Done: ChatOllama provider (base URL, explicit num_ctx, reasoning effort), Groq-only error
+  handling and fallbacks, one plain retry for invalid local tool calls, past reasoning dropped
+  from history, provider/model overrides in CLI and evals; live [VERIFY] and smoke test.
+- Files: `src/emporio_agent/{config.py,cli.py,client/assistant.py,core/agent.py}`,
+  `scripts/run_evals.py`, `tests/{conftest,test_llm_evals,test_ollama}.py`, `.env.example`,
+  `pyproject.toml`, `uv.lock`, `PROGRESS.md`.
+- Deps: langchain-ollama 1.1.0 (+ ollama 0.6.3).
+- Tests: ruff ok, format ok, `pytest -m "not llm"` 396 passed.

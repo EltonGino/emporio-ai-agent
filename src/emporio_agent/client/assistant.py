@@ -20,7 +20,7 @@ from emporio_agent.client.rules import HolidayCalendar, store_status
 from emporio_agent.client.tools import br_datetime, build_tools
 from emporio_agent.clock import Clock, get_clock
 from emporio_agent.config import ClientConfig, Settings
-from emporio_agent.core.agent import build_agent
+from emporio_agent.core.agent import build_agent, is_invalid_tool_call, is_local_invalid_tool_call
 from emporio_agent.core.guards import OutputGuard, PhraseCheck, PriceCheck, ProtocolCheck
 from emporio_agent.core.retrieval.base import Retriever
 
@@ -101,6 +101,18 @@ def output_guard() -> OutputGuard:
 
 
 def make_chat_model(name: str, settings: Settings, last: bool) -> BaseChatModel:
+    if settings.llm_provider == "ollama":
+        from langchain_ollama import ChatOllama
+
+        return ChatOllama(
+            model=name,
+            base_url=settings.ollama_base_url,
+            num_ctx=settings.ollama_num_ctx,  # explicit: the default would cut the prompt
+            temperature=settings.llm_temperature,
+            # gpt-oss: "low"/"medium"/"high" → Ollama's `think`; the reasoning comes back apart
+            # from the answer, in additional_kwargs["reasoning_content"] (never emitted).
+            reasoning=settings.llm_reasoning_effort,
+        )
     if settings.llm_provider != "groq":
         return init_chat_model(
             name, model_provider=settings.llm_provider, temperature=settings.llm_temperature
@@ -119,7 +131,10 @@ def make_chat_model(name: str, settings: Settings, last: bool) -> BaseChatModel:
 
 
 def model_chain(settings: Settings) -> list[BaseChatModel]:
-    names = [settings.llm_model, *settings.llm_fallback_models]
+    """Groq: the model + its rate-limit fallbacks (each has its own quota). Other providers
+    (a local Ollama): the model only — fallbacks exist for Groq's free-tier quotas."""
+    fallbacks = settings.llm_fallback_models if settings.llm_provider == "groq" else []
+    names = [settings.llm_model, *fallbacks]
     return [make_chat_model(n, settings, last=i == len(names) - 1) for i, n in enumerate(names)]
 
 
@@ -191,7 +206,31 @@ def build_store_agent(
         settings.history_max_tokens,
         settings.rate_limit_max_wait_seconds,
         guards=[output_guard()],
+        **provider_error_policy(settings),
     )
+
+
+def provider_error_policy(settings: Settings) -> dict:
+    """Groq-specific handling (429 + retry-after, 400 tool_use_failed, fallbacks) only for
+    Groq. Ollama: no rate limits; an unparsable tool call gets one plain retry."""
+    if settings.llm_provider == "ollama":
+        return {"rate_limits": False, "invalid_tool_call": is_local_invalid_tool_call}
+    return {"rate_limits": True, "invalid_tool_call": is_invalid_tool_call}
+
+
+def with_llm(
+    settings: Settings, provider: str | None, model: str | None, fallbacks: bool = True
+) -> Settings:
+    """Settings with a provider/model chosen by argument (CLI, evals); the .env is the default.
+    `fallbacks=False` with an explicit model: run on that model only (evals)."""
+    update: dict = {}
+    if provider:
+        update["llm_provider"] = provider
+    if model:
+        update["llm_model"] = model
+        if not fallbacks:
+            update["llm_fallback_models"] = []
+    return settings.model_copy(update=update) if update else settings
 
 
 DEFAULT_EVAL_NOW = "2026-03-25T10:30"  # demo date: store open, after the last order
@@ -203,14 +242,14 @@ def eval_agent_factory(
     retriever: Retriever,
     workdir: Path,
     llm_model: str | None = None,
+    llm_provider: str | None = None,
 ) -> Callable[[str | None], object]:
     """Builds a fresh agent per eval case: its own store DB copy (handoffs don't leak between
     cases), in-memory conversation memory and a fixed clock. `llm_model` runs the evals on that
     model only (no fallbacks), e.g. openai/gpt-oss-20b to spare the 120b quota."""
     from langgraph.checkpoint.memory import InMemorySaver
 
-    if llm_model:
-        settings = settings.model_copy(update={"llm_model": llm_model, "llm_fallback_models": []})
+    settings = with_llm(settings, llm_provider, llm_model, fallbacks=False)
 
     def factory(now: str | None) -> object:
         db = workdir / f"store-{uuid.uuid4().hex}.db"

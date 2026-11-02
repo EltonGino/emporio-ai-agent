@@ -26,6 +26,7 @@ from typing import Any
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
+from langchain_core.exceptions import OutputParserException
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage
 from langchain_core.messages.utils import count_tokens_approximately
@@ -56,9 +57,17 @@ def is_rate_limit(error: Exception) -> bool:
 
 
 def is_invalid_tool_call(error: Exception) -> bool:
-    """HTTP 400 when the provider validates a generated tool call against its schema
-    (Groq: code "tool_use_failed"). The generation is random: a retry usually works."""
+    """Groq: HTTP 400 when the provider validates a generated tool call against its schema
+    (code "tool_use_failed"). The generation is random: a retry usually works."""
     return getattr(error, "status_code", None) == 400 and "tool_use_failed" in str(error)
+
+
+def is_local_invalid_tool_call(error: Exception) -> bool:
+    """Ollama: langchain-ollama raises OutputParserException for unparsable tool arguments;
+    the server can also answer an error about parsing a tool call."""
+    if isinstance(error, OutputParserException):
+        return True
+    return "tool call" in str(error).lower() and (getattr(error, "status_code", 0) or 0) >= 400
 
 
 def retry_after(error: Exception) -> float | None:
@@ -85,18 +94,24 @@ class ProviderFallback(AgentMiddleware):
         fallbacks: Sequence[BaseChatModel],
         max_wait: float = MAX_RETRY_WAIT_SECONDS,
         sleep: Callable[[float], None] = time.sleep,
+        rate_limits: bool = True,
+        invalid_tool_call: Callable[[Exception], bool] = is_invalid_tool_call,
     ) -> None:
+        """`rate_limits` and `invalid_tool_call` are provider-specific (Groq: 429 handling
+        and its 400 tool_use_failed; a local Ollama has no 429 and parses tool calls itself)."""
         super().__init__()
         self.fallbacks = list(fallbacks)
         self.max_wait = max_wait
         self.sleep = sleep
+        self.rate_limits = rate_limits
+        self.invalid_tool_call = invalid_tool_call
 
     def _requests(self, request: ModelRequest) -> list[ModelRequest]:
         return [request, *(request.override(model=m) for m in self.fallbacks)]
 
     def _wait_before_retry(self, error: Exception, request: ModelRequest, retried: bool):
         """Seconds to wait before retrying the same model, or None to move on."""
-        if is_invalid_tool_call(error):
+        if self.invalid_tool_call(error):
             if retried:
                 logger.warning("invalid tool call on %s: next model", _model_name(request))
                 notify("invalid_tool_call", model=_model_name(request), action="next_model")
@@ -104,7 +119,7 @@ class ProviderFallback(AgentMiddleware):
             logger.info("invalid tool call on %s: retrying", _model_name(request))
             notify("invalid_tool_call", model=_model_name(request), action="retry")
             return 0.0
-        if not is_rate_limit(error):
+        if not (self.rate_limits and is_rate_limit(error)):
             raise error
         wait = retry_after(error)
         if retried or wait is None or wait > self.max_wait:
@@ -185,8 +200,18 @@ def _turns(messages: Sequence[AnyMessage]) -> list[list[AnyMessage]]:
 
 def _compact(turn: list[AnyMessage]) -> list[AnyMessage]:
     """A past turn without its tool calls and results: what was asked and answered. Facts must
-    be looked up again anyway (prices, orders), and tool payloads are most of the tokens."""
-    return [m for m in turn if isinstance(m, HumanMessage) or (_is_answer(m))]
+    be looked up again anyway (prices, orders), and tool payloads are most of the tokens.
+    Past reasoning is dropped too: ChatOllama would send it back to the model as input
+    (ChatGroq doesn't), and gpt-oss expects earlier turns without their reasoning."""
+    return [_without_reasoning(m) for m in turn if isinstance(m, HumanMessage) or (_is_answer(m))]
+
+
+def _without_reasoning(message: AnyMessage) -> AnyMessage:
+    kwargs = message.additional_kwargs
+    if "reasoning_content" not in kwargs:
+        return message
+    rest = {k: v for k, v in kwargs.items() if k != "reasoning_content"}
+    return message.model_copy(update={"additional_kwargs": rest})
 
 
 def _is_answer(message: AnyMessage) -> bool:
@@ -254,6 +279,8 @@ def build_agent(
     rate_limit_max_wait: float = MAX_RETRY_WAIT_SECONDS,
     rate_limit_sleep: Callable[[float], None] = time.sleep,
     guards: Sequence[AgentMiddleware] = (),
+    rate_limits: bool = True,
+    invalid_tool_call: Callable[[Exception], bool] = is_invalid_tool_call,
 ):
     """`models[0]` answers; the others are rate-limit fallbacks, in order. `guards` (e.g.
     ProtocolGuard) wrap everything else, so they check the answer whichever model wrote it."""
@@ -263,7 +290,13 @@ def build_agent(
         system_prompt=system_prompt,
         middleware=[
             *guards,
-            ProviderFallback(models[1:], rate_limit_max_wait, rate_limit_sleep),
+            ProviderFallback(
+                models[1:],
+                rate_limit_max_wait,
+                rate_limit_sleep,
+                rate_limits=rate_limits,
+                invalid_tool_call=invalid_tool_call,
+            ),
             DynamicContext(context),
             TrimHistory(history_max_messages, history_max_tokens),
         ],

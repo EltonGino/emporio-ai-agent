@@ -24,7 +24,8 @@ CASES = load_cases(EVALS / "routing_cases.yaml") + load_cases(EVALS / "adversari
 @pytest.fixture(scope="session")
 def eval_factory(request, tmp_path_factory):
     settings = get_settings()  # loads .env
-    if settings.llm_provider == "groq" and not os.environ.get("GROQ_API_KEY"):
+    provider = request.config.getoption("--llm-provider") or settings.llm_provider
+    if provider == "groq" and not os.environ.get("GROQ_API_KEY"):
         pytest.skip("GROQ_API_KEY not set")
     from emporio_agent.core.retrieval.index import get_retrievers
 
@@ -34,6 +35,7 @@ def eval_factory(request, tmp_path_factory):
         get_retrievers()[2],
         tmp_path_factory.mktemp("evals"),
         request.config.getoption("--llm-model"),
+        request.config.getoption("--llm-provider"),
     )
 
 
