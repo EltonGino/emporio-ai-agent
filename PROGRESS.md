@@ -13,9 +13,10 @@ Update this file in the same commit as every plan step (see AGENTS.md §0 and §
 
 ## Next step
 
-**Stop for the owner's review of the README draft** (local commit, not pushed). Feature freeze:
-only bug fixes. After the review: step 22 (recorded example conversations on gpt-oss-120b),
-then fill the README TODOs (example links, video link, final 120b eval run).
+**Stop for the owner's review of `scripts/record_conversations.py`** (local commit, not pushed;
+feature freeze: only bug fixes). Then, on the 120b: record the examples with the command under
+"Recording the examples" in the last log entry, review them, then the video and the final eval
+run if quota is left; fill the README TODOs.
 
 ## Plan status
 
@@ -42,7 +43,7 @@ then fill the README TODOs (example links, video link, final 120b eval run).
 | 19 | Chat UI with streaming | done (mock API; real API in step 17) | `feat(frontend): customer service chat with streaming` (4ae5145) |
 | 20 | Bastidores panel + simulated date banner | done (mock API) | `feat(frontend): demo-mode behind-the-scenes panel and simulated date banner` (1979f10); `fix(agent): refusals in Tom's voice` (3515048); `fix(agent): refusal examples, phrase guard, optional order data, injection rule` (30f7830); `test: eval reports tool args and guard interventions as a metric` (eb89dce); `test: injected-instruction criterion and pending eval re-runs` (d67afd5) |
 | 21 | Serve frontend from API, Docker | done | `build: serve frontend from API, Dockerfile and compose` |
-| 22 | Recorded example conversations | pending | |
+| 22 | Recorded example conversations | script ready, recording on the 120b pending | `feat(examples): script to record the example conversations` |
 | 23 | README | draft (TODOs: step 22 links, video, final 120b eval run) | `docs: README draft` |
 
 ## Verified facts ([VERIFY] items resolved)
@@ -1918,4 +1919,46 @@ then fill the README TODOs (example links, video link, final 120b eval run).
   topics declined in one sentence) in Persona and tone; both match the prompt and tools.
   Rendering checked with GitHub's own GFM renderer (`gh api markdown`, nothing published):
   7/7 tables render, including the two inside `<details>`; Mermaid block and 3 images present.
+
+### 2026-11-02 — Step 22 prepared: script to record the example conversations
+- `src/emporio_agent/core/recording.py` (client-agnostic, tested) + `scripts/record_conversations.py`
+  (the 5 scenarios of the owner's brief and the wiring). Each scenario runs through
+  `eval_agent_factory`: fresh session, **clean store DB copy**, its own fixed clock
+  (`AGENT_NOW` per scenario), in-memory memory, and **one model without fallbacks** — the
+  script always passes the model explicitly (`--llm-model` or `LLM_MODEL`), so an example
+  labelled 120b was really written by the 120b. Options: `--llm-provider`, `--llm-model`,
+  `--out-dir` (default `examples/`), `--pace` (seconds between messages and between scenarios,
+  default 20), `--scenarios 1,3` (re-record some).
+- Each file `NN_<slug>.md`: title, scenario description, simulated date (pt-BR, Campo Grande
+  time, open/closed from the store rules), provider · model(s) that answered, recording date,
+  input tokens; per turn the customer message, Tom's answer (blockquote, Markdown kept), the
+  tools called with their arguments — failed calls marked "→ rejected (invalid arguments; the
+  model called again)" or "→ error: <code>" (the 20b first sent `reason: "pedido atrasado"`,
+  then the right enum) — and output-guard interventions with the held-back text (160 chars).
+- **Stops without a partial file**: a turn ending in `RATE_LIMITED_MESSAGE` or in an error event
+  raises `RecordingStopped`; scenarios already finished stay written, the current one is not
+  (exit code 1). Tests (`tests/test_recording.py`, scripted model): turn tools + guard + held
+  text, failed-call marking, rate-limit stop, error stop, finished-vs-stopped files.
+- **Ollama check** (gpt-oss:20b, `--out-dir` in the scratchpad, nothing written to `examples/`
+  and nothing committed): all 5 recorded, twice: **78,448 and 82,188 input tokens over 13 turns
+  (≈ 6,000/turn)**. Seen in the 20b runs: the date check's retry and once its safe answer
+  (scenario 3), the robotic-phrase retry (scenario 5), rejected tool calls corrected by the
+  model. Content issues are the 20b's (e.g. "24 h úteis"); the official examples use the 120b.
+- **Recording the examples (tomorrow, 120b on Groq):**
+
+  ```
+  RATE_LIMIT_MAX_WAIT_SECONDS=60 uv run python scripts/record_conversations.py \
+      --llm-provider groq --llm-model openai/gpt-oss-120b --pace 60
+  ```
+
+  `--pace 60` starts each message in a fresh per-minute window (8K TPM; a turn with 2–3 model
+  calls takes ≈ 6–9K input tokens) and `RATE_LIMIT_MAX_WAIT_SECONDS=60` lets the agent wait
+  out a 429 instead of stopping (as in the official eval run). If it stops, re-run only the
+  missing ones with `--scenarios N`. Duration ≈ 12 pauses × 60 s + model time ≈ 15 min.
+  **Token estimate**: ≈ 80K input tokens (the Ollama measurement; same gpt-oss tokenizer), plus
+  ≈ 2–3K output/reasoning; Groq doesn't count cached tokens, so this is the worst case. The
+  120b's daily limit is 200K tokens: the examples fit with room for re-recording one or two
+  scenarios, but the examples **plus** a full eval run (31 cases, ≈ 33 turns × 4.3–4.8K ≈
+  140–160K) likely exceed one day's quota — keep the owner's order (examples, video, then the
+  eval run if quota is left). Examples are never hand-edited (AGENTS.md §0.9): re-record instead.
 
