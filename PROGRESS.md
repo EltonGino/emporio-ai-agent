@@ -37,9 +37,9 @@ review" under Known issues.
 | 13 | Event stream + JSONL tracing | done | `feat(core): event stream and JSONL tracing` (f2d2ac8) |
 | 14 | CLI with debug mode | done | `feat(cli): interactive CLI with debug mode` (f8ea8e2); `fix(agent): price guard, alternatives, verified-order handoffs and promotions` (2e40cf1) |
 | 15 | Routing + adversarial evals | prepared (not run) | `test: routing and adversarial eval cases and runner` (f544c30) |
-| 16 | CI workflow | done (not yet run on GitHub) | `ci: lint and tests workflow` |
+| 16 | CI workflow | done (not yet run on GitHub) | `ci: lint and tests workflow` (af62cb5) |
 | 17 | FastAPI (SSE, sessions, rate limit, retention, deletion) | pending | |
-| 18 | Frontend scaffold | pending | |
+| 18 | Frontend scaffold | done | `feat(frontend): Vite React scaffold` |
 | 19 | Chat UI with streaming | pending | |
 | 20 | Bastidores panel + simulated date banner | pending | |
 | 21 | Serve frontend from API, Docker | pending | |
@@ -757,6 +757,16 @@ review" under Known issues.
   `hashFiles` condition) until `frontend/package-lock.json` exists. LLM evals never run in CI.
   The workflow was validated as YAML and the two pytest selections locally; it has not run on
   GitHub yet (no push).
+- **Step 18** — `frontend/` from `npm create vite@latest -- --template react-ts`: React 19.3,
+  Vite 8.3, TypeScript 7.0, oxlint (template default). Added Tailwind CSS v4 via
+  `@tailwindcss/vite` (theme tokens in `src/index.css` `@theme`), `react-markdown`, and fonts
+  bundled with Fontsource (no runtime Google Fonts request, works offline/in Docker):
+  **Fraunces** (variable serif, titles), **Source Sans 3** (chat), **JetBrains Mono**
+  (Bastidores console). Palette from instrument woods (ivory/spruce/maple backgrounds, walnut
+  text, amber accent, burgundy emphasis; dark "console" palette for the internal panel), AA
+  contrast noted in the CSS. Vite dev server proxies `/api` → `http://localhost:8000`.
+  Template boilerplate removed; favicon = "T" monogram on burgundy. `frontend/screenshots/`
+  is gitignored (review screenshots).
 - **Convention** — The "Commit" column holds the commit subject; hashes are in `git log`
   (a commit cannot contain its own hash).
 
@@ -1075,3 +1085,9 @@ review" under Known issues.
 - Files: `.github/workflows/ci.yml`, `PROGRESS.md`.
 - Tests: YAML parses; `pytest -m "not llm and not embeddings"` 334 passed and `pytest -m
   embeddings` 1 passed locally. Not run on GitHub (no push).
+
+### 2026-11-02 09:40 — Step 18: Frontend scaffold
+- Done: Vite React TS app, Tailwind v4 theme, fonts, dev proxy, favicon; placeholder page.
+- Files: `frontend/**` (package.json + lock, vite/ts configs, index.html, src/main.tsx,
+  src/App.tsx, src/index.css, public/favicon.svg, README.md, .gitignore), `PROGRESS.md`.
+- Checks: `npm run build` ok, `npm run lint` ok.

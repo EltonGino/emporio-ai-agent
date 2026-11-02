@@ -1,0 +1,55 @@
+@import 'tailwindcss';
+@import '@fontsource-variable/fraunces';
+@import '@fontsource/source-sans-3/400.css';
+@import '@fontsource/source-sans-3/600.css';
+@import '@fontsource/jetbrains-mono/400.css';
+
+/*
+ * Palette from instrument woods: ivory/spruce backgrounds, walnut text, amber (lacquer)
+ * accent and a burgundy (rosewood) for emphasis. Text colours are checked for WCAG AA on
+ * their backgrounds (walnut on ivory ≈ 13:1, burgundy on ivory ≈ 9:1, ivory on burgundy ≈ 9:1).
+ * The "Bastidores" panel uses a dark console palette on purpose: internal, not customer-facing.
+ */
+@theme {
+  --font-display: 'Fraunces Variable', Georgia, serif;
+  --font-sans: 'Source Sans 3', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+  --color-ivory: #f8f1e4;
+  --color-cream: #fffaf0;
+  --color-spruce: #efe2c8;
+  --color-maple: #e2cfa8;
+  --color-walnut: #3b2618;
+  --color-walnut-soft: #6b4f3a;
+  --color-amber: #b5651d;
+  --color-amber-deep: #8f4a12;
+  --color-burgundy: #7a2e1f;
+  --color-burgundy-deep: #5c1f14;
+
+  --color-console: #17120e;
+  --color-console-line: #2c241d;
+  --color-console-text: #e8dccb;
+  --color-console-dim: #a8957f;
+  --color-console-green: #9ccc65;
+  --color-console-amber: #f0b45a;
+  --color-console-red: #ef8a7a;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-ivory);
+  color: var(--color-walnut);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+:focus-visible {
+  outline: 3px solid var(--color-amber);
+  outline-offset: 2px;
+}
