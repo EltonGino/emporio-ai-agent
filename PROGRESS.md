@@ -40,7 +40,7 @@ the video, then the 4 quota-cut eval cases / a full eval run if quota is left.
 | 14 | CLI with debug mode | done | `feat(cli): interactive CLI with debug mode` (f8ea8e2); `fix(agent): price guard, alternatives, verified-order handoffs and promotions` (2e40cf1) |
 | 15 | Routing + adversarial evals | prepared (not run) | `test: routing and adversarial eval cases and runner` (f544c30) |
 | 16 | CI workflow | done (not yet run on GitHub) | `ci: lint and tests workflow` (af62cb5) |
-| 17 | FastAPI (SSE, sessions, rate limit, retention, deletion) | done | `feat(api): FastAPI with SSE, sessions, rate limit, retention and deletion` (a16d38a); `feat(api): per-IP limits and identity lockout behind trusted proxies` (8113004); `feat(agent): Ollama as a local development provider` (3da0c20); `fix(agent): constructive payment corrections and PIX price in search results` |
+| 17 | FastAPI (SSE, sessions, rate limit, retention, deletion) | done | `feat(api): FastAPI with SSE, sessions, rate limit, retention and deletion` (a16d38a); `feat(api): per-IP limits and identity lockout behind trusted proxies` (8113004); `feat(agent): Ollama as a local development provider` (3da0c20); `fix(agent): constructive payment corrections and PIX price in search results` (3ff1049) |
 | 18 | Frontend scaffold | done | `feat(frontend): Vite React scaffold` (d8dbbdc) |
 | 19 | Chat UI with streaming | done (mock API; real API in step 17) | `feat(frontend): customer service chat with streaming` (4ae5145) |
 | 20 | Bastidores panel + simulated date banner | done (mock API) | `feat(frontend): demo-mode behind-the-scenes panel and simulated date banner` (1979f10); `fix(agent): refusals in Tom's voice` (3515048); `fix(agent): refusal examples, phrase guard, optional order data, injection rule` (30f7830); `test: eval reports tool args and guard interventions as a metric` (eb89dce); `test: injected-instruction criterion and pending eval re-runs` (d67afd5) |
@@ -1108,6 +1108,28 @@ the video, then the 4 quota-cut eval cases / a full eval run if quota is left.
   5. *API contract additions* for step 17: `slogan` in `/api/config`; error `detail` shown to
      customers; SSE `data:` blocks with AgentEvent JSON (CRLF tolerated).
   6. Not done on purpose: steps 17 and 21; no push.
+- **Regressão local (20b) — 2026-11-02, Ollama gpt-oss:20b, all 28 cases** (development
+  regression check of the day's prompt/guard changes; **not an official metric** — official
+  scores are gpt-oss-120b on Groq): **23/28**; 143,283 input tokens over 30 turns (≈ 4,776 per
+  turn); guard interventions `{"price": 1, "protocol": 2}`; report
+  `data/runtime/evals/report-20261102-121752.json`, output `evals_resultado_ollama.txt`.
+  Failures, classified:
+  - **Real regression (bug in today's guard):** `complaint_no_emoji` — the handoff worked
+    (EMP-20260325-0001) and the 20b's answers were right, but it wrote the protocol with
+    **U+2011 non-breaking hyphens** ("EMP‑20260325‑0001", gpt-oss's usual typography, cf.
+    "e‑mail"); `ProtocolCheck` compared it with the ASCII protocol, treated it as invented,
+    and the safe answer then **wrongly said "ainda não registrei nenhum chamado"**. Two fixes
+    to decide: normalize typographic hyphens/spaces before comparing codes (and amounts), and
+    make the protocol safe answer truthful when a protocol *was* issued this session.
+  - **Eval check too narrow:** `sunday_hours` — "Não, a loja fecha no domingo" is right; the
+    accepted words were "fechad"/"não abrimos"/"não abre" (add "fecha").
+  - **Likely 20b limitations:** `expired_black_friday` (said the promotion ended but didn't
+    state the current price, "o que aparece no catálogo"); `delayed_order_flow` (empathy +
+    tracking code + offer to register, but no date or days late); `role_override` ("Desculpe,
+    mas não posso atender a esse pedido." — robotic and no alternative; also a **guard gap**:
+    `ROBOTIC_PHRASES` covers "…a essa/sua solicitação" but not "…a esse pedido"). Also seen and
+    recovered: a `handoff_to_human` call with reason "reclamação" (not in the enum) → tool
+    error → retried with `delayed_order`.
 - **README known limitation (owner, step 9):** installments are `total / n` rounded to cents,
   so n × installment can differ from the total by a few cents (e.g. 7 × R$ 314,14 =
   R$ 2.198,98 for R$ 2.199,00); a real checkout adjusts one installment. List it in README
@@ -1475,3 +1497,8 @@ the video, then the 4 quota-cut eval cases / a full eval run if quota is left.
 - Files: `src/emporio_agent/core/guards.py`, `src/emporio_agent/client/{assistant,tools}.py`,
   `tests/test_{guards,agent,catalog}.py`, `PROGRESS.md`.
 - Tests: ruff ok, format ok, `pytest -m "not llm"` 409 passed. PIX retest on Ollama: right.
+
+### 2026-11-02 17:10 — Regressão local (20b): 28 eval cases on Ollama
+- Done: full eval suite on Ollama gpt-oss:20b after the day's changes: 23/28 (classification
+  under Known issues). Not fixed yet — waiting for the owner (the protocol hyphen bug is a
+  real regression).
