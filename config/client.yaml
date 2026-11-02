@@ -30,6 +30,15 @@ catalog:
   sells_only_instruments: true
   non_sold_accessories: [cordas, palhetas, cabos, cases, pedais, amplificadores]
   partner_stores: []                       # P4: manual names none → never invent
+  # English words for category names only (the catalog is in Portuguese; owner decision).
+  # Plurals match too ("drums", "guitars"), except irregular ones, listed.
+  category_synonyms:
+    "Baterias e Percussão": [drums]
+    "Baixos": [bass, basses]
+    "Teclados e Pianos": [keyboard, piano, synth]
+    "Violões": [acoustic guitar, classical guitar]   # longer phrases win over "guitar"
+    "Guitarras": [electric guitar, guitar]
+    "Ukuleles": [ukulele]
 
 payments:                                  # manual §3, §3.1, §6.2
   pix_discount_percent: 5

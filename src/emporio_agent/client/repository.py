@@ -228,9 +228,11 @@ def _alternatives(
     return same_category[:MAX_ALTERNATIVES]
 
 
-def _matching_categories(categories: list[Category], name: str) -> set[str]:
+def _matching_categories(
+    categories: list[Category], name: str, synonyms: matching.SynonymTable
+) -> set[str]:
     """Categories whose name (or, failing that, description) matches every term."""
-    terms = matching.query_terms(name)
+    terms = matching.rewrite_terms(matching.query_terms(name), synonyms)
     for field_name in ("name", "description"):
         found = {
             c.name
@@ -253,8 +255,9 @@ def _named_categories(categories: list[Category], terms: list[str]) -> set[str]:
 
 
 class SqlStoreRepository:
-    def __init__(self, engine: Engine) -> None:
+    def __init__(self, engine: Engine, category_synonyms: dict[str, list[str]] | None = None):
         self._engine = engine
+        self._synonyms = matching.synonym_table(category_synonyms or {})
 
     def _products(self, session: Session, *conditions: Any) -> list[ProductInfo]:
         stmt = (
@@ -274,7 +277,7 @@ class SqlStoreRepository:
         if filters.on_promotion:
             candidates = [p for p in candidates if p.promotion is not None]
         if filters.category:
-            allowed = _matching_categories(categories, filters.category)
+            allowed = _matching_categories(categories, filters.category, self._synonyms)
             candidates = [p for p in candidates if p.category in allowed]
         candidates = [
             p
@@ -282,7 +285,7 @@ class SqlStoreRepository:
             if (filters.min_price is None or p.final_price >= filters.min_price)
             and (filters.max_price is None or p.final_price <= filters.max_price)
         ]
-        terms = matching.query_terms(filters.query or "")
+        terms = matching.rewrite_terms(matching.query_terms(filters.query or ""), self._synonyms)
         # A query word naming a category acts as a filter, so alternatives for "ukulele preto"
         # are ukuleles; skipped when those categories are empty ("cordas" → Cordas Orquestrais).
         named = _named_categories(categories, terms)
@@ -297,6 +300,11 @@ class SqlStoreRepository:
                 unavailable = [p for p in matches if p.availability != "disponivel"]
             candidates = [p for p in candidates if p.availability == "disponivel"]
         products, unmatched = _rank(terms, candidates)
+        if not products and not unavailable and terms and (filters.category or in_named):
+            # The category exists but no product matches the words ("Gibson" among violões,
+            # "drums" before the synonyms): offer its products instead of "we have none".
+            products = sorted(candidates, key=lambda p: (p.final_price, p.id))
+            unmatched = terms
         unavailable = unavailable[:MAX_UNAVAILABLE_MATCHES]
         alternatives = _alternatives(unavailable[0], catalog, products) if unavailable else []
         return ProductSearch(products, unavailable, unmatched, alternatives)

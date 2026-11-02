@@ -59,6 +59,35 @@ def term_matches(term: str, terms: set[str]) -> bool:
     return any(fuzz.ratio(term, t) >= MIN_SIMILARITY for t in terms if t.isalpha())
 
 
+SynonymTable = list[tuple[list[str], list[str]]]
+
+
+def synonym_table(synonyms: dict[str, list[str]]) -> SynonymTable:
+    """(phrase terms, category terms) pairs, longest phrase first."""
+    table = [
+        (query_terms(phrase), query_terms(category))
+        for category, phrases in synonyms.items()
+        for phrase in phrases
+    ]
+    return sorted((pair for pair in table if pair[0]), key=lambda pair: -len(pair[0]))
+
+
+def rewrite_terms(terms: list[str], table: SynonymTable) -> list[str]:
+    """Replace whole synonym phrases by their category's terms: "acoustic guitar yamaha" →
+    "violao yamaha" (the longest phrase wins, so it is not "guitar" → guitarra)."""
+    out, i = [], 0
+    while i < len(terms):
+        for phrase, category in table:
+            if terms[i : i + len(phrase)] == phrase:
+                out.extend(category)
+                i += len(phrase)
+                break
+        else:
+            out.append(terms[i])
+            i += 1
+    return list(dict.fromkeys(out))
+
+
 def match_score(terms: list[str], document: set[str]) -> float:
     """Fraction of query terms found in the document (1.0 = all of them)."""
     if not terms:

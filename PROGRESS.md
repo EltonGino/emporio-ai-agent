@@ -1807,3 +1807,34 @@ one customer per conversation). One local commit per fix, no push. Steps 22/23 r
   deterministic output check (an order's date from this turn's `get_order_status`, preceded
   by envio/entrega/despacho → correction note and retry), like the other guards.
 
+### 2026-11-02 — Owner decisions on the open points, then feature freeze
+- **Owner decisions:** (1) English catalog: category synonyms in client.yaml **and** a
+  category fallback, plus a prompt rule; (2) implement the deterministic order-date check;
+  (3) English/Spanish versions of the guard's safe answers, chosen by the same language
+  detection; (4) emoji removed from **all** limit messages (fix 5, approved as done).
+  **Feature freeze after these: from now on only bug fixes.** Then run the affected cases on
+  Ollama, commit, push every local commit, and stop before the README.
+- **Decision 1 — English catalog.** (a) `catalog.category_synonyms` in client.yaml (new
+  optional `CatalogConfig` field), category names only, as the owner listed: drums → Baterias
+  e Percussão; bass/basses → Baixos; keyboard/piano/synth → Teclados e Pianos; acoustic
+  guitar/classical guitar → Violões; electric guitar/guitar → Guitarras; ukulele → Ukuleles.
+  `matching.synonym_table` + `rewrite_terms` replace whole phrases (exact, after the usual
+  normalization and rough singular, so "drums"/"guitars"/"keyboards" match; the irregular
+  "basses" is listed) by the category's terms, longest phrase first ("acoustic guitar" →
+  violão, not guitarra), in both the query and the category filter.
+  `SqlStoreRepository(engine, category_synonyms)` (default none, so tests/other callers
+  are unchanged); `build_store_agent` passes the client's. (b) **Category fallback:** when a
+  category was given (filter or a category word in the query) but no product matches the
+  query terms and there is no unsellable exact match, the category's products (available
+  ones with `only_available`) are returned, cheapest first, as `partial_match` with the
+  terms in `unmatched_terms` ("Gibson" + violões; "elétrica" + guitarras, the gap found in
+  fix 1). Price filters still apply (no fallback over them); empty categories still return
+  nothing (D9); an unsellable exact item keeps the alternatives path. Prompt: never say the
+  store lacks a kind of instrument without a `search_products` call in the turn. Tests:
+  every synonym in query and category, longest-phrase rewrite, synonym categories exist in
+  categories.csv, fallback (available only, price order, partial), D9, GF-3D alternatives.
+  Live (Ollama 20b, 2 runs of 8 affected cases: both language cases, guitars_under_1000,
+  discontinued_with_alternatives, strings_accessory, seven_string_guitar,
+  ukulele_promotion, price_martin): **8/8 both runs**; `language_english_follow_up` now
+  lists the three drum kits (the model still sends `query "drums"`; the synonym resolves it).
+

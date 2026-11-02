@@ -1,3 +1,4 @@
+import csv
 import json
 from decimal import Decimal
 
@@ -8,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from emporio_agent.client import matching
 from emporio_agent.client.db.engine import make_engine
-from emporio_agent.client.db.loader import load_store_data
+from emporio_agent.client.db.loader import RAW_DIR, load_store_data
 from emporio_agent.client.db.models import Promotion
 from emporio_agent.client.repository import (
     ProductFilters,
@@ -367,3 +368,76 @@ def test_search_positive_bounds_and_limit_are_applied(tools):
     assert all(
         400 <= p.get("promo", {}).get("final_price", p["price"]) <= 1000 for p in result["products"]
     )
+
+
+# --- English category words and category fallback (owner decision) ------------------------
+
+
+@pytest.fixture(scope="module")
+def english_repo(engine):
+    return SqlStoreRepository(engine, get_client_config().catalog.category_synonyms)
+
+
+def categories_found(repo, **filters) -> set[str]:
+    return {p.category for p in repo.find_products(ProductFilters(**filters)).products}
+
+
+def test_synonym_categories_exist_in_the_catalog():
+    with (RAW_DIR / "categories.csv").open(encoding="utf-8", newline="") as f:
+        names = {row["name"] for row in csv.DictReader(f)}
+    assert set(get_client_config().catalog.category_synonyms) <= names
+
+
+@pytest.mark.parametrize(
+    "words, category",
+    [
+        ("drums", "Baterias e Percussão"),  # owner's frontend test: "And about drums?"
+        ("drum", "Baterias e Percussão"),
+        ("bass", "Baixos"),
+        ("basses", "Baixos"),
+        ("keyboards", "Teclados e Pianos"),
+        ("synth", "Teclados e Pianos"),
+        ("piano", "Teclados e Pianos"),
+        ("acoustic guitar", "Violões"),  # the longer phrase wins over "guitar"
+        ("classical guitars", "Violões"),
+        ("electric guitar", "Guitarras"),
+        ("guitars", "Guitarras"),
+        ("ukulele", "Ukuleles"),
+    ],
+)
+def test_english_category_words_in_query_or_category(english_repo, words, category):
+    assert categories_found(english_repo, query=words) == {category}
+    assert categories_found(english_repo, category=words) == {category}
+
+
+def test_synonyms_keep_the_other_words():
+    table = matching.synonym_table({"Violões": ["acoustic guitar"], "Guitarras": ["guitar"]})
+    terms = matching.query_terms("yamaha acoustic guitar")
+    assert matching.rewrite_terms(terms, table) == ["yamaha", "violao"]
+    assert matching.rewrite_terms(["fender", "guitar"], table) == ["fender", "guitarra"]
+
+
+def test_without_synonyms_english_words_find_nothing(repo):
+    assert repo.find_products(ProductFilters(query="drums")).products == []
+
+
+def test_category_without_matching_words_offers_its_products(english_repo):
+    """Owner decision: "Gibson" among violões → the available violões, flagged as similar."""
+    found = english_repo.find_products(ProductFilters(query="Gibson", category="violões"))
+    assert found.products and {p.category for p in found.products} == {"Violões"}
+    assert all(p.availability == "disponivel" for p in found.products)
+    assert found.partial_match and found.unmatched_terms == ["gibson"]
+    prices = [p.final_price for p in found.products]
+    assert prices == sorted(prices)
+
+
+def test_category_fallback_never_invents_items_for_empty_categories(english_repo):
+    assert english_repo.find_products(ProductFilters(query="saxofone")).products == []  # D9
+    found = english_repo.find_products(ProductFilters(query="yamaha", category="madeiras"))
+    assert found.products == []
+
+
+def test_unsellable_exact_item_keeps_its_alternatives(english_repo):
+    found = english_repo.find_products(ProductFilters(query="GF-3D", category="violões"))
+    assert [p.name for p in found.unavailable] == ["Giannini GF-3D Dreadnought Sunburst"]
+    assert found.products == [] and found.alternatives

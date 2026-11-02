@@ -337,7 +337,7 @@ def build_store_agent(
     engine = make_engine(settings.database_url)
     ensure_store_data(engine)
     tools = build_tools(
-        SqlStoreRepository(engine),
+        SqlStoreRepository(engine, client.catalog.category_synonyms),
         client,
         clock,
         retriever,

@@ -172,6 +172,8 @@ class CatalogConfig(_Strict):
     sells_only_instruments: bool
     non_sold_accessories: list[str]
     partner_stores: list[str] = []
+    # Category name → English words searched as that category (the catalog is Portuguese).
+    category_synonyms: dict[str, list[str]] = {}
 
 
 class InstallmentBand(_Strict):
