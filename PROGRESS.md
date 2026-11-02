@@ -34,7 +34,7 @@ runtime table (no FK to store tables). Holidays need a BR/MS holiday source — 
 | 7 | Retrieval golden set + eval script | done | `feat(evals): retrieval golden set and evaluation script` (fdb9a8e) |
 | 8 | Catalog and promotion tools | done | `feat(tools): catalog and promotion tools` (26bf364); signals in `feat(tools): partial-match and accessory signals in product search` |
 | 9 | Payment rules | done | `feat(tools): payment rules` (ebaa394) |
-| 10 | Order status + return eligibility | done | `feat(tools): order status and return eligibility with identity check` |
+| 10 | Order status + return eligibility | done | `feat(tools): order status and return eligibility with identity check` (4d14084); `feat(tools): days since order in order status` |
 | 11 | Store status, policy search, handoff | pending | |
 | 12 | Persona prompt + agent with memory | pending | |
 | 13 | Event stream + JSONL tracing | pending | |
@@ -455,6 +455,14 @@ runtime table (no FK to store tables). Holidays need a BR/MS holiday source — 
   one call, without a policy search. Reasons are a `ReturnReason` literal in `config.py`.
 - **Step 10** — `build_tools(repo, client, clock, failed_lookups=None)`: tools take the injectable
   clock (dates depend on "today").
+- **Stale orders (owner decision, 2026-11-02).** `get_order_status` returns
+  `days_since_order` (today − order date, injectable clock). **Step 12:** the prompt must say:
+  pending or confirmed order for many days → acknowledge the wait with empathy and offer
+  `handoff_to_human`, **never invent a date or deadline**. (`delayed` stays ETA-based, D7.)
+- **Identity lockout persistence (owner decision, 2026-11-02) — apply in step 17.** Persist
+  the failed-lookup counter in the `sessions` table (e.g. `failed_order_lookups` column) so it
+  survives restarts; `identity.FailedLookups` becomes an interface with the in-memory version
+  for tests/CLI and a DB-backed one for the API.
 - **Convention** — The "Commit" column holds the commit subject; hashes are in `git log`
   (a commit cannot contain its own hash).
 
@@ -480,7 +488,7 @@ runtime table (no FK to store tables). Holidays need a BR/MS holiday source — 
   R$ 2.198,98 for R$ 2.199,00); a real checkout adjusts one installment. List it in README
   "Known limitations" (step 23).
 - **README security note (step 10):** the lockout counter is per session and in memory: it
-  resets on restart and a new session starts a new counter. It limits guessing inside one
+  resets on restart (step 17 persists it in `sessions`) and a new session starts a new counter. It limits guessing inside one
   conversation; real protection needs authenticated customers or a per-IP/global limit
   (step 17's per-session and daily caps help). List it in README.
 
@@ -623,3 +631,9 @@ runtime table (no FK to store tables). Holidays need a BR/MS holiday source — 
 - Tests: ruff ok, format ok, `pytest -m "not llm"` 177 passed.
 - Notes: AGENTS.md §15 scenarios check out: order 8 at 2026-03-25 → `delayed: true`; order 7
   at 2026-02-20, arrependimento → eligible until 24/02/2026 (3 days elapsed).
+
+### 2026-11-02 01:10 — Step 10 follow-up: days since order (owner request)
+- Done: pushed step 10 (owner approval). `days_since_order` in `get_order_status` (+ docstring
+  hint); recorded the step 12 prompt rule and the step 17 counter persistence.
+- Files: `src/emporio_agent/client/tools.py`, `tests/test_orders.py`, `PROGRESS.md`.
+- Tests: ruff ok, format ok, `pytest -m "not llm"` 178 passed.

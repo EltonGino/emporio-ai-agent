@@ -126,6 +126,13 @@ def test_shipped_order_past_eta_is_delayed(make_tools):
     assert result["delayed"] is True  # D7
 
 
+def test_days_since_order_for_old_confirmed_order(make_tools):
+    result = json.loads(status(make_tools("2026-03-25T10:30"), 9, "juliana.almeida@hayoo.com.br"))
+    assert result["status_text"] == "confirmado, em preparação"
+    assert result["days_since_order"] == 33  # ordered 2026-02-20
+    assert result["delayed"] is False  # no ETA to compare with (D7)
+
+
 def test_shipped_order_before_eta_is_not_delayed(make_tools):
     assert json.loads(status(make_tools("2026-02-20T10:00"), 8, ANA))["delayed"] is False
 

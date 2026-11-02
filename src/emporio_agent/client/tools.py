@@ -295,7 +295,8 @@ def build_tools(
     @tool(args_schema=OrderLookupArgs)
     def get_order_status(order_id: int, email: str, config: RunnableConfig) -> str:
         """Status of the customer's own order. Ask for the order number AND the purchase email
-        first. delayed=true → apologize and offer handoff_to_human."""
+        first. delayed=true, or pending/confirmed for many days (days_since_order) → acknowledge
+        the wait, offer handoff_to_human, never invent a date."""
         order = identified_order(order_id, email, config)
         if isinstance(order, str):
             return order
@@ -307,6 +308,7 @@ def build_tools(
             "status": order.status,
             "status_text": ORDER_STATUS_TEXT[order.status],
             "order_date": br_date(order.order_date),
+            "days_since_order": (today - order.order_date).days,
             "items": [{"name": i.name, "quantity": i.quantity} for i in order.items],
             **money("total", order.total),  # amount paid (D4)
             "payment_method": payment_method_text(order.payment_method),
