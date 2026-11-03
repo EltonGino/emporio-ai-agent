@@ -171,36 +171,11 @@ def test_robotic_phrases(answer, found):
 
 # --- payment answers need a payment tool ---------------------------------------------------
 
-from emporio_agent.client.assistant import (  # noqa: E402
-    PAYMENT_DETAIL_PATTERNS,
-    PAYMENT_DETAIL_WORDS,
-    PAYMENT_TOOLS,
-    PAYMENT_TOPIC_WORDS,
-    PIX_DETAIL_WORDS,
-    PIX_EVIDENCE_FIELDS,
-    price_correction_note,
-)
-from emporio_agent.core.guards import TopicToolCheck  # noqa: E402
+from emporio_agent.client.assistant import output_guard, price_correction_note  # noqa: E402
 
-PAYMENT = TopicToolCheck(
-    topic_words=PAYMENT_TOPIC_WORDS,
-    detail_words=PAYMENT_DETAIL_WORDS,
-    detail_patterns=PAYMENT_DETAIL_PATTERNS,
-    amounts_are_details=False,
-    tools=PAYMENT_TOOLS,
-    correction_note=lambda p: "",
-    safe_answer="s",
-    name="payment_tool",
-)
-PIX = TopicToolCheck(
-    topic_words=("pix",),
-    detail_words=PIX_DETAIL_WORDS,
-    tools=PAYMENT_TOOLS,
-    evidence_fields=PIX_EVIDENCE_FIELDS,
-    correction_note=lambda p: "",
-    safe_answer="s",
-    name="pix_value",
-)
+# The real checks, as wired in the agent (evidence fields included).
+PAYMENT = next(c for c in output_guard().checks if c.name == "payment_tool")
+PIX = next(c for c in output_guard().checks if c.name == "pix_value")
 GD20 = '{"products":[{"id":95,"price":2199.0,"pix_price":2089.05,"pix_price_text":"R$ 2.089,05"}]}'
 
 
@@ -209,6 +184,12 @@ def tool_result(name: str, content: str = "{}") -> ToolMessage:
 
 
 SEARCH = tool_result("search_products", GD20)
+SEARCH_VIOLOES = tool_result(
+    "search_products",
+    '{"products":[{"id":86,"name":"Tagima Dallas Tuner Aço Natural","price":749.0,'
+    '"installments_text":"até 7x sem juros de R$ 107,00"},{"id":107,"price":799.0,'
+    '"installments_text":"até 7x sem juros de R$ 114,14"}]}',
+)
 
 
 def flagged(answer: str, *results: ToolMessage) -> bool:
@@ -251,6 +232,20 @@ def flagged(answer: str, *results: ToolMessage) -> bool:
             False,
         ),
         ("Total: R$ 349,90 (cartão de crédito em 6x).", [], True),  # no lookup in the turn
+        # Example recording (120b): each product's own plan from the search is evidence.
+        (
+            "- **Tagima Dallas Tuner Aço Natural**: R$ 749,00, até 7x sem juros de R$ 107,00",
+            [SEARCH_VIOLOES],
+            False,
+        ),
+        ("O Tagima sai em até 7x de R$ 107,00 no cartão.", [SEARCH_VIOLOES], False),
+        # ...but not an amount it didn't return: the sum of three products split in 12x.
+        (
+            "Todos podem ser pagos em até 12x sem juros (≈ R$ 199,75 por parcela).",
+            [SEARCH_VIOLOES],
+            True,
+        ),
+        ("Todos saem em até 12x sem juros.", [SEARCH_VIOLOES], True),  # no amount: no evidence
     ],
 )
 def test_payment_answers_need_a_payment_tool_or_the_tools_pix_value(answer, results, expected):
@@ -263,8 +258,6 @@ def test_price_correction_points_to_the_right_tool():
 
 
 # --- order date labels (owner decision: deterministic check) --------------------------------
-
-from emporio_agent.client.assistant import output_guard  # noqa: E402
 
 ORDER_8 = (
     '{"order_id":8,"customer_first_name":"Ana","status":"shipped","status_text":"enviado",'

@@ -161,6 +161,7 @@ def price_correction_note(invalid: set[str]) -> str:
 # elsewhere in the answer (an offer "quer saber do parcelamento?" isn't a claim).
 PAYMENT_TOPIC_WORDS = (
     "parcel",
+    "sem juros",  # "todos saem em até 12x sem juros" names no "parcela"
     "boleto",
     "cartão de crédito",
     "cartão de débito",
@@ -181,6 +182,8 @@ PAYMENT_TOOLS = (
 # PIX: a product search returns pix_price, so citing that exact amount is accepted too.
 PIX_DETAIL_WORDS = ("desconto", "%")
 PIX_EVIDENCE_FIELDS = ("pix_price", "pix_total")
+# A product's own plan from a search ("até 7x sem juros de R$ 107,00"), like pix_price.
+INSTALLMENT_EVIDENCE_FIELDS = ("installments_text",)
 # When an amount/PIX/payment answer had none of these in the turn, the retry must call one.
 CATALOG_PAYMENT_TOOLS = (
     "search_products",
@@ -211,9 +214,10 @@ def payment_correction_note(_: set[str]) -> str:
     return (
         "## Correção obrigatória (pagamento)\n"
         "Sua resposta anterior fala de parcelas ou formas de pagamento sem ter consultado a "
-        "ferramenta certa neste turno. Chame agora calculate_payment_options com o produto (ou "
-        "o carrinho) para parcelas e totais — ou search_policies para uma regra geral — e "
-        "responda com o que ela devolver."
+        "ferramenta certa neste turno. Para o parcelamento de cada produto, cite o "
+        "installments_text que search_products devolveu para ele, com o valor da parcela; para "
+        "totais de uma compra, chame calculate_payment_options; para uma regra geral, "
+        "search_policies. Responda com o que elas devolverem."
     )
 
 
@@ -247,6 +251,7 @@ def output_guard() -> OutputGuard:
                 detail_patterns=PAYMENT_DETAIL_PATTERNS,
                 amounts_are_details=False,
                 tools=PAYMENT_TOOLS,
+                evidence_fields=INSTALLMENT_EVIDENCE_FIELDS,
                 correction_note=payment_correction_note,
                 safe_answer=localized(SAFE_PAYMENT_ANSWERS),
                 name="payment_tool",

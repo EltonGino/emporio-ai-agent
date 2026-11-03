@@ -71,6 +71,13 @@ def max_installments(total: Decimal, bands: Sequence[InstallmentBand]) -> int:
     )
 
 
+def installments_text(total: Decimal, bands: Sequence[InstallmentBand]) -> str:
+    """Best interest-free plan for this amount alone: "até 7x sem juros de R$ 107,00"."""
+    n = max_installments(total, bands)
+    value = format_brl(to_cents(total / n))
+    return f"até {n}x sem juros de {value}" if n > 1 else f"1x de {value} (sem parcelamento)"
+
+
 def pix_price(price: Decimal, promotional: bool, payments: PaymentsConfig) -> Decimal:
     """§6.2: the PIX discount doesn't apply on top of a promotional price."""
     if promotional and not payments.pix_applies_to_promotional:

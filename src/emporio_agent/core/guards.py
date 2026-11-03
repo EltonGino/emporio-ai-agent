@@ -43,7 +43,6 @@ from emporio_agent.core.events import notify
 from emporio_agent.core.text import normalize_typography
 
 logger = logging.getLogger(__name__)
-DISCARDED_PREVIEW_CHARS = 300
 SafeAnswer = str | Callable[[Sequence[AnyMessage]], str]
 
 
@@ -224,9 +223,9 @@ def field_values(messages: Iterable[AnyMessage], fields: Sequence[str]) -> list[
 
 
 def field_amounts(messages: Iterable[AnyMessage], fields: Sequence[str]) -> set[Decimal]:
-    """Values of the given JSON keys (at any depth) in these tool results, as amounts."""
-    amounts = (parse_amount(str(v)) for v in field_values(messages, fields))
-    return {a for a in amounts if a is not None}
+    """Amounts in the values of the given JSON keys (at any depth) in these tool results: a
+    number (2089.05), a formatted price ("R$ 2.089,05") or a phrase ("até 7x de R$ 107,00")."""
+    return {a for v in field_values(messages, fields) for a in amounts_in(str(v))}
 
 
 @dataclass
@@ -234,7 +233,7 @@ class TopicToolCheck:
     """If the answer talks about `topic_words` with details — money amounts (when
     `amounts_are_details`), `detail_words` or `detail_patterns` — one of `tools` must have run
     in this turn, or the answer must cite an amount a tool returned in one of
-    `evidence_fields` (e.g. `pix_price` in a product search result)."""
+    `evidence_fields` (e.g. `pix_price` or `installments_text` in a product search result)."""
 
     topic_words: Sequence[str]
     detail_words: Sequence[str]
@@ -411,8 +410,8 @@ class OutputGuard(AgentMiddleware):
             "output_guard",
             action="retry",
             failures={name: sorted(p) for name, p in failures.items()},
-            # Internal (demo panel / trace only): what the customer was kept from seeing.
-            discarded_text=discarded.text[:DISCARDED_PREVIEW_CHARS],
+            # Internal (demo panel / trace only): the full text the customer was kept from seeing.
+            discarded_text=discarded.text,
             discarded_usage=discarded.usage_metadata,
             model=discarded.response_metadata.get("model_name"),
             forced_tools=[t.name for t in forced],
@@ -438,7 +437,7 @@ class OutputGuard(AgentMiddleware):
             "output_guard",
             action="safe_answer",
             failures={name: sorted(p) for name, p in failures.items()},
-            discarded_text=answer.text[:DISCARDED_PREVIEW_CHARS],
+            discarded_text=answer.text,
             discarded_usage=answer.usage_metadata,
             model=answer.response_metadata.get("model_name"),
         )

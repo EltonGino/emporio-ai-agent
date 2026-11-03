@@ -13,9 +13,10 @@ Update this file in the same commit as every plan step (see AGENTS.md §0 and §
 
 ## Next step
 
-Feature freeze: only bug fixes. Remaining: record the examples on the 120b (command in the step 22
-log entry), the final eval run if quota is left, then the README TODOs (example conversations,
-final 120b run). The demo video is done and linked.
+Feature freeze: only bug fixes. Scenario 1 is recorded on the 120b (`examples/01_…`, not
+committed yet); next: record scenarios 2–5 (`--scenarios 2,3,4,5`, command in the step 22 log
+entry), owner review, commit the examples, then the README TODOs (example conversations, final
+120b run if quota is left). The demo video is done and linked.
 
 ## Plan status
 
@@ -42,7 +43,7 @@ final 120b run). The demo video is done and linked.
 | 19 | Chat UI with streaming | done (mock API; real API in step 17) | `feat(frontend): customer service chat with streaming` (4ae5145) |
 | 20 | Bastidores panel + simulated date banner | done (mock API) | `feat(frontend): demo-mode behind-the-scenes panel and simulated date banner` (1979f10); `fix(agent): refusals in Tom's voice` (3515048); `fix(agent): refusal examples, phrase guard, optional order data, injection rule` (30f7830); `test: eval reports tool args and guard interventions as a metric` (eb89dce); `test: injected-instruction criterion and pending eval re-runs` (d67afd5) |
 | 21 | Serve frontend from API, Docker | done | `build: serve frontend from API, Dockerfile and compose` |
-| 22 | Recorded example conversations | script ready, recording on the 120b pending | `feat(examples): script to record the example conversations` |
+| 22 | Recorded example conversations | scenario 1 recorded on the 120b; 2–5 pending | `feat(examples): script to record the example conversations` |
 | 23 | README | draft (TODOs: step 22 links, video, final 120b eval run) | `docs: README draft` |
 
 ## Verified facts ([VERIFY] items resolved)
@@ -2012,3 +2013,47 @@ final 120b run). The demo video is done and linked.
   on Ollama; official metrics and the example conversations use gpt-oss-120b on Groq."), and a
   "Demo" row in "Case requirements → where to find it". Remaining README TODOs: example
   conversations, final 120b eval run.
+
+### 2026-11-03 — Step 22: scenario 1 on the 120b, per-product installments (owner)
+- Checked first: the demo video link was already in the README (lines 34 and 49); nothing to add.
+  Today Ollama is unavailable: every LLM call is Groq `openai/gpt-oss-120b`; `.env` untouched.
+- **First recording of scenario 1** (`--scenarios 1`, command of the step 22 entry): 2 turns,
+  **21,452 input tokens**, 120b only, no 429. Two real problems, so it was not kept:
+  1. Turn 1 ("violões até R$ 1.000"): after `search_products` the `payment_tool` check held the
+     list twice and the customer got the payment safe answer ("me diz qual instrumento…"),
+     which doesn't answer a list request. Most likely the list stated installments that a
+     product search didn't return (the held text was cut at 160 chars and there was no trace,
+     so it couldn't be confirmed). No forced retry: `search_products` had already run.
+  2. Turn 2 (GF-3D esgotado): the model put the three alternatives in **one**
+     `calculate_payment_options` cart and wrote "Todos… em até 12x sem juros (≈ R$ 199,75 por
+     parcela)" — 1/12 of the **sum** (R$ 2.397); alone, R$ 749/799 allow 7x and R$ 849 8x. It
+     passed the guards because the amount did come from a tool.
+- **Fixes (no LLM, owner):** (1) `rules.installments_text(total, bands)` ("até 7x sem juros
+  de R$ 107,00"; "1x de R$ X (sem parcelamento)" below the 2x minimum), on the final
+  (promotional) price, added as `installments_text` to every **available** product in
+  `search_products` / alternatives / `list_active_promotions` (`product_summary`) and to
+  `get_product_details.payment`; `calculate_payment_options.installment_summary` uses the same
+  function. `payment_tool` accepts an installment amount found in a turn tool's
+  `installments_text` as evidence (`INSTALLMENT_EVIDENCE_FIELDS`), like `pix_price` for PIX;
+  `field_amounts` now reads every amount inside a field's value (number, "R$ …" or phrase). The
+  correction note points to `installments_text`. (2) `calculate_payment_options` description:
+  items are ONE purchase (summed); to compare products never sum them, give each product's
+  `installments_text`; `search_products` says to quote it per product. (3) Guard notices keep
+  the **full** `discarded_text` (demo panel / trace only; the 300-char cap is gone) and the
+  recording writes it whole as a blockquote (Markdown kept; the 160-char cut is gone).
+  Extra gap found by a new test: "Todos saem em até 12x sem juros" had no payment topic word
+  and went unchecked → **"sem juros"** joined `PAYMENT_TOPIC_WORDS`.
+- Tests: guard tests now use the real `payment_tool`/`pix_value` checks from `output_guard()`;
+  new cases: band texts (749 → 7x R$ 107,00, 2199, 480, 240, 1200, 99,99 → 1x), per-product
+  plans in a real search, promotional price, no plan for esgotado items, the recorded
+  "≈ R$ 199,75 por parcela" (held), "até 7x… R$ 107,00" from the search (passes), the tool
+  descriptions, the whole held-back text in the recording. `ruff check`, `ruff format --check`,
+  `pytest -m "not llm"` **590 passed**, 32 deselected.
+- **Re-recording of scenario 1:** 2 turns, **14,791 input tokens**, 120b only, no 429, **no guard
+  intervention**. Turn 1: `search_products` (violões, max 1000, limit 10) → 10 violões, each with
+  price, PIX and its own plan; turn 2: `search_products` (GF-3D) → "temporariamente
+  indisponível" + the tool's 3 alternatives with their own plans. All values re-checked against
+  the tool without LLM. Minor, accepted by the owner: 10 of 12 matches shown under a title that
+  reads as complete; the catalog typo "GN-15 Nylon Cedr" written as "Cedro"; no greeting.
+- **Groq 120b tokens today so far: ≈ 36K input** (21,452 + 14,791) of the 200K daily limit.
+

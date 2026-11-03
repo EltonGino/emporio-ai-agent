@@ -31,6 +31,7 @@ from emporio_agent.client.rules import (
     HolidayCalendar,
     StoreStatus,
     format_brl,
+    installments_text,
     max_installments,
     payment_options,
     pix_price,
@@ -102,6 +103,9 @@ def product_summary(
     if payments is not None:  # §6.2 applied here: no PIX discount on a promotional price
         promotional = product.promotion is not None
         data |= money("pix_price", pix_price(product.final_price, promotional, payments))
+        if product.availability == "disponivel":  # a plan is a sale condition
+            bands = payments.installment_bands
+            data["installments_text"] = installments_text(product.final_price, bands)
     if specs is None:
         keys = [k for k in KEY_SPECS if k in product.specs][:MAX_KEY_SPECS]
         specs = {k: product.specs[k] for k in keys}
@@ -277,7 +281,7 @@ def build_tools(
         exact matches not for sale now; offer only the returned alternatives. partial_match =
         exact item not in the catalog (unmatched_terms); results are only similar.
         pix_price_text already follows the rules (no PIX discount on promotional prices);
-        installments need calculate_payment_options.
+        installments_text = best plan for that product alone (say it as is, per product).
         possible_accessory_query = asks for an accessory the store doesn't sell."""
         filters = ProductFilters(
             query=query,
@@ -329,6 +333,7 @@ def build_tools(
                 **money("pix_price", pix_price(price, product.promotion is not None, payments)),
                 "max_installments": n,
                 **money("installment", to_cents(price / n)),
+                "installments_text": installments_text(price, bands),
             }
         return to_json(data)
 
@@ -342,8 +347,10 @@ def build_tools(
 
     @tool(args_schema=PaymentArgs)
     def calculate_payment_options(items: list[CartItem]) -> str:
-        """Cart totals: card/debit/boleto, PIX, interest-free installments (say
-        installment_summary), combined payment. Use for any payment question."""
+        """Totals of ONE purchase (one cart, items summed): card/debit/boleto, PIX,
+        interest-free installments (say installment_summary), combined payment. To compare
+        different products, never sum them: give each product's own installments_text from
+        search_products/get_product_details."""
         quantities: dict[int, int] = {}
         for item in items:
             quantities[item.product_id] = quantities.get(item.product_id, 0) + item.quantity
@@ -384,10 +391,7 @@ def build_tools(
             **money("pix_total", options.pix_total),
             "pix_discount_percent": payments.pix_discount_percent,
             "max_installments": options.max_installments,
-            "installment_summary": (
-                f"até {options.max_installments}x sem juros de "
-                f"{format_brl(options.installments[-1][1])}"
-            ),
+            "installment_summary": installments_text(options.total, payments.installment_bands),
             # Every allowed option, for "e em 10x?"; the summary is what to say by default.
             "installment_options": [f"{n}x de {format_brl(v)}" for n, v in options.installments],
             "boleto_clearing_business_days": payments.boleto_clearing_business_days,

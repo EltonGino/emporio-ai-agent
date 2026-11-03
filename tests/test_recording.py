@@ -68,7 +68,7 @@ def test_recording_keeps_each_turns_tools_and_guard_interventions():
     assert '- `search_products` `{"query": "Takamine GD20"}`' in text
     assert "Tools called: none." in text
     assert "Output guard (retry): " in text and "R$ 1.999,00" in text
-    assert '(held back, never shown to the customer: "No PIX sai por R$ 1.999,00.")' in text
+    assert "Held back, never shown to the customer:\n\n> No PIX sai por R$ 1.999,00." in text
 
 
 @tool
@@ -115,3 +115,22 @@ def test_finished_scenarios_are_written_and_the_stopped_one_is_not():
     with pytest.raises(RecordingStopped):
         record_all([SCENARIO, other], lambda now: next(agents), written.append)
     assert [r.scenario.filename for r in written] == ["02_payment.md"]
+
+
+def test_recording_keeps_the_whole_held_back_text():
+    long_answer = "**Violões até R$ 1.000:**\n\n" + "\n".join(
+        f"- Violão {i}: R$ 1.999,00 no PIX" for i in range(20)
+    )
+    recording = record(
+        agent(
+            call("search_products", {"query": "Takamine GD20"}),
+            AIMessage("O Takamine GD20 sai por R$ 2.199,00."),
+            AIMessage(long_answer),  # invented amounts: held back
+            AIMessage("Quer que eu calcule o PIX pra você?"),
+        ),
+        SCENARIO,
+    )
+    held = recording.turns[1].guard[0]["discarded_text"]
+    assert held == long_answer and len(held) > 300
+    text = render_markdown(recording, "ollama", "quarta-feira, 25/03/2026 às 10:30", "2026-11-02")
+    assert "> - Violão 19: R$ 1.999,00 no PIX" in text  # the last line, Markdown kept

@@ -18,8 +18,6 @@ from typing import Any
 from emporio_agent.core.agent import RATE_LIMITED_MESSAGE
 from emporio_agent.core.events import stream_turn
 
-HELD_BACK_CHARS = 160
-
 
 @dataclass(frozen=True)
 class Scenario:
@@ -155,9 +153,8 @@ def render_markdown(
         for notice in turn.guard:
             failures = "; ".join(f"{k}: {', '.join(v)}" for k, v in notice["failures"].items())
             lines.append(f"\nOutput guard ({notice['action']}): {failures}")
-            if held := " ".join(notice.get("discarded_text", "").split()):
-                cut = held if len(held) <= HELD_BACK_CHARS else f"{held[:HELD_BACK_CHARS]}…"
-                lines.append(f'(held back, never shown to the customer: "{cut}")')
+            if (held := notice.get("discarded_text", "")).strip():
+                lines += ["", "Held back, never shown to the customer:", "", _quote(held)]
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 

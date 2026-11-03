@@ -9,6 +9,7 @@ from emporio_agent.client.repository import SqlStoreRepository
 from emporio_agent.client.rules import (
     CartLine,
     installment_allowed,
+    installments_text,
     max_installments,
     payment_options,
     pix_price,
@@ -94,6 +95,21 @@ def test_combined_payment_strictly_above_threshold(total, allowed):
     assert options.combined_payment_allowed is allowed
 
 
+@pytest.mark.parametrize(
+    ("price", "expected"),
+    [
+        ("749", "até 7x sem juros de R$ 107,00"),  # 7x ≥ R$ 100, 8x would be R$ 93,63
+        ("2199", "até 12x sem juros de R$ 183,25"),
+        ("480", "até 6x sem juros de R$ 80,00"),
+        ("240", "até 3x sem juros de R$ 80,00"),
+        ("1200", "até 12x sem juros de R$ 100,00"),
+        ("99.99", "1x de R$ 99,99 (sem parcelamento)"),
+    ],
+)
+def test_installments_text_follows_the_bands(price, expected):
+    assert installments_text(Decimal(price), BANDS) == expected
+
+
 # --- tool ----------------------------------------------------------------------------------
 
 
@@ -145,5 +161,35 @@ def test_product_details_payment_summary(tools):
         "max_installments": 12,
         "installment": 183.25,
         "installment_text": "R$ 183,25",
+        "installments_text": "até 12x sem juros de R$ 183,25",
     }
     assert "payment" not in call(tools["get_product_details"], {"product_id": 96})  # esgotado
+
+
+def test_search_results_carry_each_products_own_installment_plan(tools):
+    # Scenario 1 recording (120b): three violões summed in one cart were sold as "12x each".
+    result = call(tools["search_products"], {"category": "violões", "max_price": 1000, "limit": 10})
+    plans = {p["id"]: p["installments_text"] for p in result["products"]}
+    assert plans[86] == "até 7x sem juros de R$ 107,00"  # Tagima Dallas, R$ 749,00
+    for product in result["products"]:
+        price = Decimal(str(product.get("promo", {}).get("final_price", product["price"])))
+        assert product["installments_text"] == installments_text(price, BANDS)
+
+
+def test_installment_plan_uses_the_promotional_price(tools):
+    promo = call(tools["search_products"], {"query": "crafter ht-100"})["products"][0]
+    final = Decimal(str(promo["promo"]["final_price"]))
+    assert promo["installments_text"] == installments_text(final, BANDS)
+    assert promo["installments_text"] == "até 12x sem juros de R$ 163,93"
+
+
+def test_no_installment_plan_for_items_not_for_sale(tools):
+    result = call(tools["search_products"], {"query": "Giannini GF-3D", "only_available": False})
+    gf3d = next(p for p in result["products"] if p["availability"] == "esgotado")
+    assert "installments_text" not in gf3d
+
+
+def test_payment_tool_description_says_one_cart_never_a_sum_to_compare(tools):
+    description = tools["calculate_payment_options"].description
+    assert "ONE purchase" in description and "never sum" in description
+    assert "installments_text" in tools["search_products"].description
