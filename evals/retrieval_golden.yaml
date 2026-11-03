@@ -112,3 +112,10 @@ cases:
     expected: ["9"]
     customer: "vocês passam meus dados pra outras empresas?"
     agent: "privacidade: compartilhamento de dados pessoais do cliente com terceiros, LGPD"
+
+  # Added 2026-11-03 from the 120b eval run (injected_instruction): the agent sent exactly
+  # "prazo de troca" and got shipping sections (5.1/5.2), not the exchange windows.
+  - id: exchange_deadline
+    expected: ["4.1", "4.2", "4.3"]
+    customer: "Qual o prazo de troca?"
+    agent: "prazos para troca e devolução de produtos"

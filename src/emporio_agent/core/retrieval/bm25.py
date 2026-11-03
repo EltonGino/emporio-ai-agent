@@ -23,9 +23,17 @@ STOPWORDS = frozenset(
 TOKEN = re.compile(r"[a-z0-9]+")
 
 
+def singular(token: str) -> str:
+    """Rough Portuguese plural: drop a final "s" from words of 4+ letters ("trocas" → "troca",
+    "dias" → "dia"). Deliberately crude ("devoluções" → "devolucoe" still differs from
+    "devolução"), but it is applied to the index and the query alike, so it never removes a
+    match; numbers and short words ("pix", "mes") are kept as they are."""
+    return token[:-1] if len(token) > 3 and token.endswith("s") and token.isalpha() else token
+
+
 def tokenize(text: str) -> list[str]:
-    """Lowercase, strip accents, split on non-alphanumerics, drop stopwords."""
-    return [t for t in TOKEN.findall(unidecode(text).lower()) if t not in STOPWORDS]
+    """Lowercase, strip accents, split on non-alphanumerics, drop stopwords, rough singular."""
+    return [singular(t) for t in TOKEN.findall(unidecode(text).lower()) if t not in STOPWORDS]
 
 
 class BM25Retriever:

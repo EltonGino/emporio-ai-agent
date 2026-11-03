@@ -71,6 +71,29 @@ def test_bm25_finds_exact_terms(policy_chunks, query, section_id):
     assert BM25Retriever(policy_chunks).search(query, 3)[0].chunk.section_id == section_id
 
 
+@pytest.mark.parametrize(
+    ("token", "expected"),
+    [
+        ("trocas", "troca"),
+        ("troca", "troca"),
+        ("dias", "dia"),
+        ("pix", "pix"),
+        ("mes", "mes"),
+        ("2", "2"),
+        ("12x", "12x"),
+    ],
+)
+def test_tokenize_rough_singular(token, expected):
+    assert tokenize(token) == [expected]
+
+
+def test_bm25_singular_query_matches_plural_headings(policy_chunks):
+    # 120b eval run: "prazo de troca" matched only "prazo de entrega" (5.1/5.2); the exchange
+    # sections say "Trocas".
+    top = [r.chunk.section_id for r in BM25Retriever(policy_chunks).search("prazo de troca", 3)]
+    assert top[0] in {"4.1", "4.2", "4.3"} and not {"5.1", "5.2"} & set(top[:1])
+
+
 def test_bm25_returns_nothing_without_shared_terms(policy_chunks):
     assert BM25Retriever(policy_chunks).search("xyzzy", 3) == []
     assert BM25Retriever(policy_chunks).search("de para com", 3) == []  # only stopwords
