@@ -13,9 +13,9 @@ Update this file in the same commit as every plan step (see AGENTS.md §0 and §
 
 ## Next step
 
-**Stop for the owner's review of the bug fixes from the video rehearsal** (pushed; see the last
-log entry). Feature freeze: only bug fixes. Then: record the examples on the 120b (command in
-the step 22 log entry), the video, the final eval run if quota is left, README TODOs.
+Feature freeze: only bug fixes. Remaining: record the examples on the 120b (command in the step 22
+log entry), the final eval run if quota is left, then the README TODOs (example conversations,
+final 120b run). The demo video is done and linked.
 
 ## Plan status
 
@@ -2004,3 +2004,11 @@ the step 22 log entry), the video, the final eval run if quota is left, README T
   this change stashed: 20b variance, not this change.
 - Pushed (owner's instruction): `d871164`, `72f3857` and this commit.
 
+
+
+### 2026-11-02 — Demo video linked in the README
+- Owner recorded the demo video: https://youtu.be/Y-DLTzXPs4w. README: the video TODO became
+  the link plus the owner's transparency line ("Demo recorded with gpt-oss-20b running locally
+  on Ollama; official metrics and the example conversations use gpt-oss-120b on Groq."), and a
+  "Demo" row in "Case requirements → where to find it". Remaining README TODOs: example
+  conversations, final 120b eval run.

@@ -31,8 +31,11 @@ Demo mode shows each turn's tool calls, retrieved policy sections, guard interve
 and token usage. Customers never see that panel: outside demo mode the server does not send
 those events at all.
 
+**Demo video:** [youtu.be/Y-DLTzXPs4w](https://youtu.be/Y-DLTzXPs4w). Demo recorded with
+gpt-oss-20b running locally on Ollama; official metrics and the example conversations use
+gpt-oss-120b on Groq.
+
 > TODO: example conversations.
-> TODO: demo video.
 
 ### Case requirements → where to find it
 
@@ -43,6 +46,7 @@ those events at all.
 | When to query data vs. policies | [Architecture](#architecture) (data vs. policies), [Technical decisions](#technical-decisions) 1–2, routing cases in [Agent evaluation](#agent-evaluation) |
 | Out-of-scope questions | [Persona and tone](#persona-and-tone), adversarial cases in [Agent evaluation](#agent-evaluation) |
 | Example conversations | [`examples/`](examples/) (TODO) |
+| Demo | [Video](https://youtu.be/Y-DLTzXPs4w) (gpt-oss-20b on Ollama) |
 | Justification of decisions (framework, LLM, retrieval, prompt strategy) | [Technical decisions](#technical-decisions), [Output guards](#output-guards) |
 | Known limitations and next steps | [Known limitations and next steps](#known-limitations-and-next-steps) |
 | Use of AI coding assistants | [How AI assistants were used](#how-ai-assistants-were-used) |
