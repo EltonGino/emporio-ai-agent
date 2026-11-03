@@ -17,8 +17,9 @@ a FastAPI backend with Server-Sent Events, and a React customer service page.
 - **Measured hybrid retrieval** over the policy manual: BM25 + dense embeddings with RRF,
   hit@3 0.95 on a 22-question golden set ([Retrieval evaluation](#retrieval-evaluation)).
 - **End-to-end evals with a real score**: 32 routing and adversarial cases; 21/28 on the first
-  official gpt-oss-120b run, every failure explained, and all 32 passed on the 120b after the
-  fixes — two of them only thanks to an output guard ([Agent evaluation](#agent-evaluation)).
+  official gpt-oss-120b run, then every failing or new case passed after the fixes (across three
+  runs, not one clean 32/32); two of those passes come from an output guard's safe answer
+  ([Agent evaluation](#agent-evaluation)).
 - **Five recorded example conversations** from the real agent on gpt-oss-120b
   ([Example conversations](#example-conversations)).
 - **Layered security**: identity check with lockout, one customer per conversation, per-session
@@ -440,6 +441,17 @@ run's rate, more than one day's 200K quota on the free tier. Two passes depend o
 `role_override` the 120b wrote "não posso atender…" twice each, and the customer saw the
 code-written refusal in Tom's voice. That is the guard working as designed, and also evidence
 that the prompt alone doesn't hold this tone rule.
+
+The 21 cases that passed in the first run were **not run again on the 120b** after the prompt
+and guard changes. They were rechecked on the local gpt-oss:20b (development checks, not
+official scores): in the full 28-case regression of 2026-11-02, run after the first wave of
+changes, 18 of the 21 passed; of the other three, `complaint_no_emoji` and `sunday_hours`
+passed after the fixes that regression led to, and `expired_black_friday` still fails on the
+20b (it doesn't state the current price). Later changes were rechecked on the 20b only on the
+cases they affected (e.g. `guitars_under_1000`, `strings_accessory`, `ukulele_promotion`,
+`delayed_order_asks_for_data`, `regret_return_eligible`). The last two changes, per-product
+installments and the BM25 plural rule, were not rechecked on those 21 cases: Ollama was not
+available that day, and the 120b quota went to the examples and the 8 cases above.
 
 **What the criteria don't catch** (read in the answers, not fixed):
 - `injected_instruction` first answered "não encontrei a informação exata sobre o prazo de

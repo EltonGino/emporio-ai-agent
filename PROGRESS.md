@@ -13,9 +13,9 @@ Update this file in the same commit as every plan step (see AGENTS.md §0 and §
 
 ## Next step
 
-Feature freeze: only bug fixes. Examples (step 22) and today's 120b evals are done and logged
-(2026-11-03 entries). Remaining: README final pass (step 23) — owner review. The demo video is
-done and linked.
+**Project complete** (owner, 2026-11-03): all 23 plan steps done; the README was reviewed by the
+owner. Anything further would be post-deadline work (see README "Known limitations and next
+steps").
 
 ## Plan status
 
@@ -43,7 +43,7 @@ done and linked.
 | 20 | Bastidores panel + simulated date banner | done (mock API) | `feat(frontend): demo-mode behind-the-scenes panel and simulated date banner` (1979f10); `fix(agent): refusals in Tom's voice` (3515048); `fix(agent): refusal examples, phrase guard, optional order data, injection rule` (30f7830); `test: eval reports tool args and guard interventions as a metric` (eb89dce); `test: injected-instruction criterion and pending eval re-runs` (d67afd5) |
 | 21 | Serve frontend from API, Docker | done | `build: serve frontend from API, Dockerfile and compose` |
 | 22 | Recorded example conversations | done (5 examples, gpt-oss-120b on Groq) | `feat(examples): script to record the example conversations` |
-| 23 | README | final pass done, owner review pending | `docs: README draft`; `docs: README with examples, final 120b scores and retrieval change` |
+| 23 | README | done (owner reviewed) | `docs: README draft`; `docs: README with examples, final 120b scores and retrieval change` |
 
 ## Verified facts ([VERIFY] items resolved)
 
@@ -2177,4 +2177,16 @@ done and linked.
   text). All TODOs removed; test count 598.
 - Correction to the previous entry: 32 cases, not "28 + 3".
 - No LLM calls in this step. Stop for the owner's README review.
+
+### 2026-11-03 — README review adjustments (owner); project complete
+- "At a glance": the evals bullet now says every failing or new case passed after the fixes,
+  across three runs (not one clean 32/32), two of them on an output guard's safe answer.
+- "Score summary": the 21 cases that passed in the first 120b run were **not re-run on the
+  120b** after the prompt/guard changes. Checked against the reports: in the full local 20b
+  regression (`report-20261102-121752.json`, 23/28) 18 of those 21 passed; `complaint_no_emoji`
+  and `sunday_hours` passed after the follow-up fixes (focused 3/3), `expired_black_friday`
+  still fails on the 20b. Later changes were rechecked on the 20b only on affected cases. Today's
+  per-product installments and BM25 plural rule were not rechecked on those 21 (no Ollama today;
+  the 120b quota went to the examples and the 8 cases).
+- No LLM calls. Owner: the project is complete.
 
