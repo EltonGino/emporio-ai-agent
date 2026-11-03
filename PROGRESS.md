@@ -43,7 +43,7 @@ done and linked.
 | 20 | Bastidores panel + simulated date banner | done (mock API) | `feat(frontend): demo-mode behind-the-scenes panel and simulated date banner` (1979f10); `fix(agent): refusals in Tom's voice` (3515048); `fix(agent): refusal examples, phrase guard, optional order data, injection rule` (30f7830); `test: eval reports tool args and guard interventions as a metric` (eb89dce); `test: injected-instruction criterion and pending eval re-runs` (d67afd5) |
 | 21 | Serve frontend from API, Docker | done | `build: serve frontend from API, Dockerfile and compose` |
 | 22 | Recorded example conversations | done (5 examples, gpt-oss-120b on Groq) | `feat(examples): script to record the example conversations` |
-| 23 | README | draft (TODOs: step 22 links, video, final 120b eval run) | `docs: README draft` |
+| 23 | README | final pass done, owner review pending | `docs: README draft`; `docs: README with examples, final 120b scores and retrieval change` |
 
 ## Verified facts ([VERIFY] items resolved)
 
@@ -2157,9 +2157,24 @@ done and linked.
     wording; the guitars listed are real).
 - **Official 120b eval history (README):** first full run 21/28 (2026-11-02); re-run of the 7
   failures 3/7 (4 cut by the exhausted daily quota); today the 4 cut cases + 4 cases added after
-  the first run: 8/8. Every one of the 28 + 3 cases has now passed on the 120b at least once; it
-  is not a single clean 31/31 run.
+  the first run: 8/8. Every one of the 32 cases (28 + 4 added later) has now passed on the 120b
+  at least once (21 + 3 + 8); it is not a single clean 32/32 run (36 turns ≈ 240K input tokens at
+  today's ≈ 6.8K/turn, above the 200K daily quota).
 - **Groq `openai/gpt-oss-120b` tokens today: ≈ 169,200 input** (examples 21,452 + 14,791 +
   58,821; evals 67,742 + 6,434), plus output/reasoning not reported by the scripts, of the
   200K daily limit. No 429 all day.
+
+### 2026-11-03 — Step 23: README final pass (owner review pending)
+- README: "Example conversations" section (links + one line each, the two guard interventions
+  highlighted) and the requirements-table row; "At a glance" (22-question golden set, 32 cases,
+  all passed on the 120b, two through the guard); retrieval section with the before → after
+  table of the plural rule and its trade-off; agent evaluation: today's 8/8 table, the score
+  summary (21/28 → 3/7 → 8/8, not one clean 32/32 run, two passes on the guard's safe answer)
+  and what the criteria don't catch; guard table: payment check with `installments_text`, the
+  per-product installments row and the required order lookup row; limitations (example slips,
+  robotic 120b refusals, Portuguese installment text in English answers, crude plural rule,
+  22-question eval) and next steps (return channel in `handoff_to_human`, localized installment
+  text). All TODOs removed; test count 598.
+- Correction to the previous entry: 32 cases, not "28 + 3".
+- No LLM calls in this step. Stop for the owner's README review.
 
